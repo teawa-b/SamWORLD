@@ -37,7 +37,7 @@ endpoint, but they still need a first real run with your key.
 | Muse Image redesign | **Implemented, not yet run against the real API** (off unless `REDESIGN_ENABLED=true`) |
 | Demo property | **Project-drawn** two-storey plan (fictional address). The plan reading comes from a **hand-authored reference interpretation** labelled `fixture:hand-authored`. **No photos are included** |
 | Furniture | **Proxy shapes** from hand-authored placement suggestions, labelled as such. With a key and photos, suggestions come from Muse + SAM |
-| RealtyAPI live listings | **Not connected.** Adapter reports what is missing; endpoints must be verified first (see `docs/realtyapi.md`) |
+| Globe + live listings | **Built.** The home screen is a MapLibre globe (OpenFreeMap tiles, no key) showing listings near a tapped point, a search or your location: Zoopla in the UK, Zillow and Realtor.com in the US, via RealtyAPI. Endpoints come from the providers' published specs and field names from sampled responses (`docs/realtyapi.md`). Mapping is unit-tested; the full live flow has **not yet been clicked through on the deployed site** |
 | SAM 3D Objects on Modal | **Scaffold only, never deployed.** Off by default; app works fully without it |
 | Supabase / R2 | Not wired up. A JSON-file job table is used (allowed for the prototype); `db/schema.sql` has the Postgres tables |
 | Hosting / live URL | **Deployed on Railway** (frontend + backend services, see `docs/deployment.md`). Running in fixture mode until `MODEL_API_KEY` is set on the backend |
@@ -62,8 +62,7 @@ npm run dev:runtime             # https://localhost:8081 (self-signed; Vite prox
 From the repo root, `npm run install:all`, `npm run dev:backend` and
 `npm run dev:frontend` do the same.
 
-Open https://localhost:8081, search "example", choose the listing, and click
-**Explore in 3D**. On localhost the IWSDK dev plugin injects the IWER XR
+Open https://localhost:8081. The home screen is a globe: tap a place or use your location to see listings nearby (needs `REALTYAPI_KEY`), or open the demo home below the search box and click **Explore in 3D**. On localhost the IWSDK dev plugin injects the IWER XR
 emulator so you can try **Enter XR** without a headset.
 
 To run the reconstruction once and bake static scenes (the viewer then works

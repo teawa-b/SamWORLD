@@ -5,6 +5,7 @@ import { DollhouseSystem, mountHouse, unmountHouse } from './systems/dollhouse.j
 import { MenuSystem } from './systems/menu.js';
 import { WalkthroughSystem } from './systems/walkthrough.js';
 import { icon } from './ui/icons.js';
+import { Globe } from './ui/globe.js';
 import { Panel } from './ui/panel.js';
 import { Sheet } from './ui/sheet.js';
 import './ui/styles.css';
@@ -53,6 +54,7 @@ window.addEventListener('resize', () => requestAnimationFrame(frame));
 app.inXR.subscribe(frame);
 
 const panel = new Panel(world, panelEl, sheet);
+panel.attachGlobe(new Globe(document.getElementById('map')!));
 await panel.start();
 panel.initialSearch();
 frame();

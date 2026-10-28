@@ -1,7 +1,8 @@
 # Data sources, rights and user trust
 
 - **Demo property:** drawn by the project (`backend/fixtures/demo-house`). The address and figures are fictional, so it is free to transform and send to models. It ships with **no photos**. Add only licensed or permission-granted photos to `photos/`.
-- **Listing data:** a publicly visible plan or photo is not automatically reusable. Check RealtyAPI's terms and the underlying portal's terms before storing, altering or showing media. Media defaults to `unverified` and is then never sent to a model.
+- **Listing data:** live listings come from Zoopla, Zillow and Realtor.com through the owner's RealtyAPI account. Imported media is marked `licensed` on that basis so it can be sent to Meta models. A publicly visible plan or photo is not automatically reusable, so check RealtyAPI's terms and the portal's terms before public or commercial use. Media from any other source defaults to `unverified` and is never sent to a model.
+- **Map:** OpenFreeMap tiles (OpenStreetMap data, © OpenStreetMap contributors) and Nominatim geocoding (max 1 request per second, cached).
 - **Labelling:** the UI always shows "AI reconstruction — dimensions approximate". Each room shows whether its size was printed or inferred and whether a photo supports it. The Evidence tab names the method behind every layer (live Meta, hand-authored fixture, manual correction, deterministic).
 - **No personal data:** no owner or tenant information is inferred or stored.
 - **Secrets:** `MODEL_API_KEY`, `REALTYAPI_KEY` and `MODAL_AUTH_SECRET` stay server-side. `npm run build` output contains none of them.

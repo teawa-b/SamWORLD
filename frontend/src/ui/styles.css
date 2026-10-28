@@ -279,3 +279,24 @@ a.plan { color: inherit; text-decoration: none; }
   .tools-grid { display: grid; grid-template-columns: repeat(4, 1fr); overflow: visible; margin: 0; padding: 0; }
   .tools-grid .tool { width: auto; }
 }
+
+/* ------------------------------------------------------------ map */
+#map { position: fixed; inset: 0; z-index: 5; background: var(--bg); }
+@media (min-width: 900px) { #map { left: var(--panel-w); } }
+#map.map-failed::after { content: 'The map needs WebGL. Use search instead.'; position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-2); }
+.maplibregl-ctrl-attrib { font-size: 10px; }
+.map-pin { width: 46px; height: 46px; border-radius: 50%; border: 3px solid var(--surface); box-shadow: 0 6px 16px -4px rgba(10, 14, 30, 0.45); background: center / cover var(--accent-soft); cursor: pointer; padding: 0; position: relative; transition: transform 0.2s; }
+.map-pin span { position: absolute; right: -6px; top: -6px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: #fff; font: 700 11px/20px system-ui, sans-serif; text-align: center; border: 2px solid var(--surface); }
+.map-pin:hover, .map-pin.active { transform: scale(1.18); z-index: 2; }
+.map-pin.active { border-color: var(--accent); }
+.map-drop { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 4px solid var(--surface); box-shadow: 0 0 0 6px var(--accent-soft), var(--shadow-sm); }
+.search-row { display: flex; gap: 8px; }
+.search-row .search { flex: 1; margin: 0; }
+.locate { width: 50px; height: 50px; border-radius: 14px; flex: none; }
+.listing .thumb img { background: var(--surface-2); }
+.listing .src { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+.listing.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.near-head { display: flex; justify-content: space-between; align-items: center; margin: 22px 0 10px; gap: 8px; }
+.near-head h3 { margin: 0; }
+.segmented.small { flex: none; }
+.segmented.small button { height: 28px; font-size: 13px; padding: 0 10px; white-space: nowrap; flex: none; }

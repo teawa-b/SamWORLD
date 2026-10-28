@@ -32,6 +32,28 @@ export interface SearchResult {
   thumbnailUrl?: string | null;
 }
 
+export interface NearbyListing {
+  provider: 'zoopla' | 'zillow' | 'realtor';
+  providerLabel: string;
+  listingId: string;
+  address: string;
+  lat: number;
+  lng: number;
+  priceText: string;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  photoUrl: string | null;
+  url: string | null;
+  importedPropertyId: string | null;
+}
+
+export interface Place {
+  lat: number;
+  lng: number;
+  label: string;
+  countryCode: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -74,6 +96,9 @@ export const api = {
     }
     return call(`/api/properties/search?q=${encodeURIComponent(q)}`);
   },
+  geocode: (q: string) => call<{ place: Place }>(`/api/geocode?q=${encodeURIComponent(q)}`),
+  nearby: (lat: number, lng: number, mode: 'rent' | 'buy') =>
+    call<{ place: Place; providers: string[]; listings: NearbyListing[]; notice: string | null }>(`/api/listings/nearby?lat=${lat}&lng=${lng}&mode=${mode}`),
   importListing: (provider: string, listingId: string) => call<{ property: Property; media: PropertyMedia[] }>('/api/properties/import', { method: 'POST', body: JSON.stringify({ provider, listingId }) }),
   property: (id: string) => call<{ property: Property; latestRun: ReconstructionRun | null; hasScene: boolean }>(`/api/properties/${id}`),
   media: (id: string) => call<{ media: PropertyMedia[] }>(`/api/properties/${id}/media`),

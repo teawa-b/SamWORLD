@@ -5,7 +5,8 @@
  */
 import type { World } from '@iwsdk/core';
 import type { Property, PropertyMedia, ReconstructionRun, Room, SceneManifest } from '../shared/index.js';
-import { api, ApiError, mediaUrl, staticMode, absoluteApiUrl, type Capabilities, type SearchResult } from '../api.js';
+import { api, ApiError, mediaUrl, staticMode, absoluteApiUrl, type Capabilities, type NearbyListing, type Place, type SearchResult } from '../api.js';
+import type { Globe } from './globe.js';
 import { app, floorsSeparated, resetBuilding, separateFloors } from '../state.js';
 import { changeLevel, enterRoom, exitRoom } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
@@ -42,7 +43,9 @@ const METHOD_LABELS: Record<string, string> = {
 };
 
 const LEVEL_SHORT = (name: string) => name.replace(/ floor$/i, '');
-const price = (p: Property['price']) => (p ? `£${p.amount.toLocaleString()}${p.period === 'sale' ? '' : ` ${p.period}`}` : '—');
+const SYMBOL: Record<string, string> = { GBP: '£', USD: '$', EUR: '€' };
+const price = (p: Property['price']) =>
+  p ? `${SYMBOL[p.currency] ?? `${p.currency} `}${Math.round(p.amount).toLocaleString()}${p.period === 'sale' ? '' : p.period === 'pcm' ? ' pcm' : ` ${p.period}`}` : '—';
 
 function roomEvidence(r: Room): { cls: string; text: string; color: string } {
   if (r.linkedMediaIds.length && r.dimensionsMeasured && !r.isEstimated) return { cls: 'ok', text: 'Photo + measured', color: '#4caf7a' };
@@ -61,6 +64,17 @@ export class Panel {
   private query = '';
   private pollTimer: number | null = null;
   private lastShellVersion = 0;
+  private nearby: NearbyListing[] = [];
+  private nearPlace: Place | null = null;
+  private nearNotice: string | null = null;
+  private nearLoading = false;
+  private mode: 'rent' | 'buy' = 'rent';
+  private globe: Globe | null = null;
+
+  attachGlobe(globe: Globe) {
+    this.globe = globe;
+    globe.onPick((lat, lng) => void this.searchAt(lat, lng));
+  }
 
   constructor(
     private world: World,
@@ -106,7 +120,8 @@ export class Panel {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    this.sheet.set(v.name === 'explore' ? 'half' : v.name === 'processing' ? 'half' : 'full');
+    this.sheet.set(v.name === 'listing' ? 'full' : 'half');
+    this.globe?.show(v.name === 'discover' || v.name === 'listing');
     this.render();
     this.body.scrollTop = 0;
   }
@@ -121,20 +136,97 @@ export class Panel {
   }
 
   private renderDiscover() {
-    const list = this.results.length
-      ? this.results.map((r) => this.resultCard(r)).join('')
-      : `<div class="empty">${this.query ? 'No listings match that search.' : 'Loading listings…'}</div>`;
+    const demo = this.results.length ? this.results.map((r) => this.resultCard(r)).join('') : '';
+    const near = this.nearLoading
+      ? '<div class="empty">Finding listings…</div>'
+      : this.nearby.length
+        ? this.nearby.map((l, i) => this.nearbyCard(l, i)).join('')
+        : this.nearNotice
+          ? `<div class="callout info">${icon('info')}<div>${esc(this.nearNotice)}</div></div>`
+          : '';
     return `
-      <div class="eyebrow">WalkIn</div>
-      <h1>Walk through a home before you visit</h1>
-      <p class="lede">We rebuild a listing from its floor plan and photos into a 3D home you can explore on your phone, computer or Meta Quest.</p>
-      <form id="search-form" class="search" role="search">
-        ${icon('search')}
-        <input id="q" value="${esc(this.query)}" placeholder="Search address or listing ID" aria-label="Search listings" autocomplete="off" enterkeyhint="search" />
-      </form>
-      ${this.realtyNotice || staticMode ? `<p class="xs faint">${staticMode ? 'Showing pre-built demo homes.' : 'Live listing search isn’t connected yet, so this shows demo listings.'}</p>` : ''}
-      <h3>Listings</h3>
-      <div id="results">${list}</div>`;
+      ${this.nearPlace ? '' : `<div class="eyebrow">WalkIn</div><h1>Find a home, then walk through it</h1>
+      <p class="lede">Tap the map or use your location to see listings nearby, then explore any of them in 3D on your phone, computer or Meta Quest.</p>`}
+      <div class="search-row">
+        <form id="search-form" class="search" role="search">
+          ${icon('search')}
+          <input id="q" value="${esc(this.query)}" placeholder="City, postcode or address" aria-label="Search a place" autocomplete="off" enterkeyhint="search" />
+        </form>
+        <button class="icon-btn locate" data-action="locate" aria-label="Use my location" title="Use my location">${icon('locate', 20)}</button>
+      </div>
+      ${
+        this.nearPlace || this.nearLoading
+          ? `<div class="near-head"><h3>${this.nearLoading ? 'Searching…' : `Near ${esc(this.nearPlace?.label || 'here')}`}</h3>
+             <div class="segmented small">${(['rent', 'buy'] as const).map((m) => `<button data-action="mode" data-mode="${m}" class="${this.mode === m ? 'active' : ''}">${m === 'rent' ? 'To rent' : 'For sale'}</button>`).join('')}</div></div>
+             <div id="nearby">${near}</div>`
+          : `<p class="xs faint" style="margin-top:8px">UK listings from Zoopla · US listings from Zillow and Realtor.com</p>`
+      }
+      ${demo ? `<h3>Try the demo home</h3>${demo}` : ''}`;
+  }
+
+  private nearbyCard(l: NearbyListing, i: number) {
+    return `
+      <button class="card listing" data-action="open-nearby" data-index="${i}">
+        <div class="thumb">${l.photoUrl ? `<img src="${esc(l.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : icon('photo', 26)}</div>
+        <div>
+          <div class="title">${i + 1}. ${esc(l.address)}</div>
+          <div class="meta">${[l.priceText, l.bedrooms != null ? `${l.bedrooms} bed` : '', l.bathrooms != null ? `${l.bathrooms} bath` : ''].filter(Boolean).map(esc).join(' · ')}</div>
+          <div class="src">${esc(l.providerLabel)}</div>
+        </div>
+      </button>`;
+  }
+
+  /** Listings near a point (from a map tap, search or the user's location). */
+  private async searchAt(lat: number, lng: number) {
+    if (this.view.name !== 'discover') return;
+    this.globe?.dropAt(lat, lng);
+    this.nearLoading = true;
+    this.nearNotice = null;
+    this.nearby = [];
+    this.sheet.set('half');
+    this.render();
+    try {
+      const r = await api.nearby(lat, lng, this.mode);
+      this.nearPlace = r.place;
+      this.nearby = r.listings;
+      this.nearNotice = r.notice;
+      this.globe?.setListings(
+        r.listings.map((l, i) => ({ id: String(i), lat: l.lat, lng: l.lng, title: l.address, photoUrl: l.photoUrl })),
+        (id) => void this.openNearby(Number(id)),
+      );
+    } catch (e) {
+      this.nearNotice = e instanceof ApiError ? e.message : 'Couldn’t load listings right now.';
+      this.nearPlace ??= { lat, lng, label: '', countryCode: '' };
+    }
+    this.nearLoading = false;
+    if (this.view.name === 'discover') this.render();
+  }
+
+  private async openNearby(i: number) {
+    const l = this.nearby[i];
+    if (!l) return;
+    this.globe?.highlight(String(i));
+    this.body.querySelectorAll('.listing.active').forEach((n) => n.classList.remove('active'));
+    this.body.querySelector(`[data-action="open-nearby"][data-index="${i}"]`)?.classList.add('active');
+    await this.globe?.flyToBuilding(l.lat, l.lng);
+    try {
+      if (l.importedPropertyId) return await this.openProperty(l.importedPropertyId);
+      this.toast(`Loading the ${l.providerLabel} listing…`);
+      const { property } = await api.importListing(l.provider, l.listingId);
+      l.importedPropertyId = property.id;
+      await this.openProperty(property.id);
+    } catch (e) {
+      this.toast(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
+  private locate() {
+    if (!navigator.geolocation) return this.toast('This browser can’t share your location. Search instead.');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => void this.searchAt(pos.coords.latitude, pos.coords.longitude),
+      (err) => this.toast(err.code === err.PERMISSION_DENIED ? 'Location is blocked. Allow it in your browser, or search instead.' : 'Couldn’t get your location. Search instead.'),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+    );
   }
 
   private resultCard(r: SearchResult) {
@@ -444,18 +536,23 @@ export class Panel {
     this.pollTimer = window.setInterval(tick, 1000);
   }
 
-  private onSubmit(e: Event) {
+  private async onSubmit(e: Event) {
     if ((e.target as HTMLElement).id !== 'search-form') return;
     e.preventDefault();
     const input = this.body.querySelector('#q') as HTMLInputElement;
     input.blur();
-    void this.loadResults(input.value);
+    this.query = input.value.trim();
+    if (!this.query) return;
+    if (staticMode) return void this.loadResults(this.query);
+    try {
+      const { place } = await api.geocode(this.query);
+      await this.searchAt(place.lat, place.lng);
+    } catch (err) {
+      this.toast(err instanceof ApiError ? err.message : 'Search failed.');
+    }
   }
 
-  private onChange(e: Event) {
-    const t = e.target as HTMLElement;
-    if (t.id === 'q') void this.loadResults((t as HTMLInputElement).value);
-  }
+  private onChange(_e: Event) {}
 
   private async onClick(e: Event) {
     const t = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
@@ -466,6 +563,11 @@ export class Panel {
     try {
       switch (a) {
         case 'home':
+          this.nearPlace = null;
+          this.nearby = [];
+          this.nearNotice = null;
+          this.globe?.clear();
+        // fall through
         case 'back':
           if (app.mode.value === 'walk') exitRoom(this.world);
           history.replaceState(null, '', location.pathname);
@@ -474,6 +576,14 @@ export class Panel {
         case 'back-listing':
           if (staticMode) return this.go({ name: 'discover' });
           return this.openProperty(pid);
+        case 'locate':
+          return this.locate();
+        case 'mode':
+          this.mode = t.dataset.mode as 'rent' | 'buy';
+          if (this.nearPlace) return void this.searchAt(this.nearPlace.lat, this.nearPlace.lng);
+          return this.render();
+        case 'open-nearby':
+          return void this.openNearby(Number(t.dataset.index));
         case 'open-listing': {
           if (t.dataset.pid) return this.openProperty(t.dataset.pid);
           const { property } = await api.importListing(t.dataset.provider!, t.dataset.listing!);

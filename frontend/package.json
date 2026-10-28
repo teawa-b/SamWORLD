@@ -18,6 +18,7 @@
     "@pmndrs/uikit": "^1.0.74",
     "@pmndrs/uikit-horizon": "^1.0.74",
     "@pmndrs/uikit-lucide": "^1.0.74",
+    "maplibre-gl": "^5.6.0",
     "three": "npm:super-three@0.181.0",
     "zod": "^4.1.0"
   },
