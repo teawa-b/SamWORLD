@@ -106,6 +106,9 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   if (live) {
     const r = await resolveModels();
     if (r.changed.length) await ctx.log('ingest', `Using the models this API key offers: ${r.changed.join('; ')}`);
+    if (r.probes && !r.changed.length && !Object.values(r.probes).includes('ok')) {
+      throw new PipelineError('NO_MUSE_MODEL', `Meta rejected every Muse model for this API key (${config.meta.museModel}: ${r.probes[config.meta.museModel] ?? 'no answer'}). Check model access and billing on dev.meta.ai.`);
+    }
     if (r.available && !r.available.includes(config.meta.museModel)) {
       throw new PipelineError('NO_MUSE_MODEL', `This Meta API key has no Muse model. Available: ${r.available.join(', ') || 'none'}`);
     }

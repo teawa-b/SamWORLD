@@ -19,8 +19,12 @@ export interface ModelResolution {
   available: string[] | null;
   chosen: Record<Role, string>;
   changed: string[];
+  probes?: Record<string, string>;
   error?: string;
 }
+
+/** Documented Muse Spark IDs, cheapest-to-try order after the configured one. */
+const MUSE_CANDIDATES = [...new Set([config.meta.museModel, 'muse-spark-1.3', 'muse-spark-1.3-contributor', 'muse-spark-1.2', 'muse-spark-1.2-contributor', 'muse-spark-1.1', 'muse-wonder-1.0'])];
 
 /** Newest first: compare the numeric parts of the ID, then prefer plain IDs over variants. */
 function rank(ids: string[]): string[] {
@@ -59,7 +63,29 @@ export function resolveModels(): Promise<ModelResolution> {
     try {
       const ids: string[] = [];
       for await (const m of metaClient().models.list()) ids.push(m.id);
-      if (!ids.length) throw new Error('model list was empty');
+      if (!ids.length) {
+        // Some keys list nothing; try the documented Muse Spark IDs with a 1-token call instead.
+        const probes: Record<string, string> = {};
+        for (const id of MUSE_CANDIDATES) {
+          try {
+            await metaClient().chat.completions.create({ model: id, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 });
+            probes[id] = 'ok';
+            ids.push(id);
+            break;
+          } catch (e) {
+            const err = e as { status?: number; code?: string; message?: string };
+            probes[id] = `${err.status ?? ''} ${err.code ?? ''} ${err.message ?? ''}`.trim();
+          }
+        }
+        if (!ids.length) {
+          pending = null;
+          return (lastResolution = { available: null, chosen: current(), changed: [], probes, error: 'model list was empty and no Muse Spark ID answered' });
+        }
+        const museModel = ids[0];
+        const changed = museModel === config.meta.museModel ? [] : [`museModel: ${config.meta.museModel} → ${museModel}`];
+        config.meta.museModel = museModel;
+        return (lastResolution = { available: null, chosen: current(), changed, probes });
+      }
       const { chosen, changed } = pickModels(ids, current());
       Object.assign(config.meta, chosen);
       return (lastResolution = { available: ids.sort(), chosen, changed });
