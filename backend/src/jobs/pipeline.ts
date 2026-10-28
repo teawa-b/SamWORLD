@@ -69,17 +69,23 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   const run = store.get('runs', runId);
   if (!run) throw new Error(`run ${runId} not found`);
   const budget = new AiBudget();
+  let saving: Promise<void> = Promise.resolve();
   const ctx: Ctx = {
     run,
     budget,
-    save: async () => {
-      run.heartbeatAt = now();
-      run.aiCalls = budget.usage.calls;
-      run.totalCostEstimate = budget.summary();
-      await store.put('runs', run.id, run);
+    save: () => {
+      // Serialised: parallel steps must not interleave writes of the run file.
+      saving = saving.catch(() => undefined).then(async () => {
+        run.heartbeatAt = now();
+        run.aiCalls = budget.usage.calls;
+        run.totalCostEstimate = budget.summary();
+        await store.put('runs', run.id, run);
+      });
+      return saving;
     },
     log: async (step, message, level = 'info') => {
       run.logs.push({ at: now(), step, level, message });
+      console.log(`[job ${run.id}] ${level === 'info' ? '' : `${level.toUpperCase()} `}${step}: ${message}`);
       await ctx.save();
     },
     setState: async (state, step, progress) => {
@@ -280,7 +286,11 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   let candidates: PlacementCandidate[] = [];
   const aiRooms = new Set<string>();
   if (live) {
-    for (const room of structure.rooms.filter((r) => r.linkedMediaIds.length)) {
+    // Rooms in parallel (3 at a time): each call carries several photos and can take ~30-60 s.
+    const rooms = structure.rooms.filter((r) => r.linkedMediaIds.length);
+    let done = 0;
+    if (rooms.length) await ctx.log('place', `Asking Muse where the furniture goes in ${rooms.length} photographed room(s)…`);
+    await pool(rooms, 3, async (room) => {
       const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 6);
       try {
         const c = await suggestPlacements({
@@ -292,10 +302,13 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
         });
         candidates.push(...c);
         aiRooms.add(room.id);
+        await ctx.log('place', `${room.label}: ${c.length} item(s) suggested (${++done}/${rooms.length})`);
       } catch (e) {
-        await ctx.log('place', `Placement suggestions for ${room.label} failed: ${(e as Error).message}`, 'warn');
+        await ctx.log('place', `Placement suggestions for ${room.label} failed: ${(e as Error).message} (${++done}/${rooms.length})`, 'warn');
       }
-    }
+      run.progress = 0.6 + 0.15 * (done / rooms.length);
+      await ctx.save();
+    });
   }
   if (isFixture) {
     const fx = PlacementCandidate.array().parse((fixtureFile(property.sourceListingId, 'placements.fixture.json') as { candidates: unknown }).candidates);
@@ -523,4 +536,13 @@ function manifest(
     evidenceFlags,
     previewCamera: { position: [cx + span * 0.9, span * 1.1, cz + span * 1.3], target: [cx, 1.2, cz] },
   });
+}
+
+/** Run fn over items with at most `limit` in flight. */
+async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
