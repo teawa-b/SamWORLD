@@ -39,7 +39,7 @@ endpoint, but they still need a first real run with your key.
 | RealtyAPI live listings | **Not connected.** Adapter reports what is missing; endpoints must be verified first (see `docs/realtyapi.md`) |
 | SAM 3D Objects on Modal | **Scaffold only, never deployed.** Off by default; app works fully without it |
 | Supabase / R2 | Not wired up. A JSON-file job table is used (allowed for the prototype); `db/schema.sql` has the Postgres tables |
-| Hosting / live URL | **Not deployed yet.** See `docs/deployment.md` |
+| Hosting / live URL | **Deployed on Railway** (frontend + backend services, see `docs/deployment.md`). Running in fixture mode until `MODEL_API_KEY` is set on the backend |
 
 Screenshots from headless Chromium (desktop) and the IWER emulator (XR):
 `docs/screenshots/`.
