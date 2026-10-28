@@ -20,25 +20,23 @@
       "canvasPointerEvents": true
     },
     "render": {
-      "near": 0.001,
+      "near": 0.01,
       "far": 200,
       "camera": {
         "position": [
-          -4,
-          1.5,
-          -6
+          0.45,
+          2.0,
+          0.05
         ],
         "lookAt": [
           0,
-          1.1,
-          -1.8
+          1.12,
+          -0.8
         ]
       }
     },
     "features": {
-      "locomotion": {
-        "useWorker": true
-      },
+      "locomotion": false,
       "grabbing": true,
       "physics": false,
       "sceneUnderstanding": false,

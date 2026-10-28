@@ -1,16 +1,18 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, shrink-to-fit=no"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
-    <title>app-web</title>
+    <title>PropertyXR</title>
   </head>
-  <body style="margin: 0">
-    <div id="scene-container"></div>
+  <body>
+    <aside id="panel" aria-label="Property controls"></aside>
+    <main id="stage">
+      <div id="scene-container"></div>
+      <button id="enter-xr" class="primary" hidden>Enter XR</button>
+    </main>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

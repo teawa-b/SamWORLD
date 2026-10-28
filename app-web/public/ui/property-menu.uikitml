@@ -1,0 +1,44 @@
+<!--
+  In-headset control panel. Shown only during an immersive session; the
+  desktop uses the HTML side panel instead. Button ids are wired in
+  src/systems/menu.ts.
+-->
+<style>
+  .root { flex-direction: column; width: 440; padding-top: 20; padding-bottom: 20; padding-left: 20; padding-right: 20; gap: 10; }
+  .title { font-size: 26; font-weight: 700; color: #1d1f22; }
+  .title:dark { color: rgba(255,255,255,0.92); }
+  .status { font-size: 15; color: #4a4f55; }
+  .status:dark { color: rgba(255,255,255,0.7); }
+  .note { font-size: 12; color: #8a5a16; }
+  .row { flex-direction: row; gap: 8; }
+  .btn { flex-grow: 1; }
+</style>
+<Panel class="root">
+  <div class="title">Property explorer</div>
+  <div id="status" class="status">Select a room by pointing at its floor</div>
+  <div class="note">AI reconstruction - dimensions approximate</div>
+  <Divider></Divider>
+  <div class="row">
+    <Button id="btn-separate" class="btn"><ButtonLabel>Separate floors</ButtonLabel></Button>
+    <Button id="btn-reset" class="btn"><ButtonLabel>Reset</ButtonLabel></Button>
+  </div>
+  <div class="row">
+    <Button id="btn-roof" class="btn"><ButtonLabel>Roof</ButtonLabel></Button>
+    <Button id="btn-walls" class="btn"><ButtonLabel>Walls</ButtonLabel></Button>
+    <Button id="btn-furniture" class="btn"><ButtonLabel>Furniture</ButtonLabel></Button>
+  </div>
+  <div class="row">
+    <Button id="btn-night" class="btn"><ButtonLabel>Day / Night</ButtonLabel></Button>
+    <Button id="btn-evidence" class="btn"><ButtonLabel>Evidence</ButtonLabel></Button>
+  </div>
+  <Divider></Divider>
+  <div class="row">
+    <Button id="btn-enter" class="btn"><ButtonLabel>Enter room</ButtonLabel></Button>
+    <Button id="btn-exit" class="btn"><ButtonLabel>Back to dollhouse</ButtonLabel></Button>
+  </div>
+  <div class="row">
+    <Button id="btn-up" class="btn"><ButtonLabel>Upstairs</ButtonLabel></Button>
+    <Button id="btn-down" class="btn"><ButtonLabel>Downstairs</ButtonLabel></Button>
+  </div>
+  <Button id="btn-exit-xr" class="btn"><ButtonLabel>Exit XR</ButtonLabel></Button>
+</Panel>
