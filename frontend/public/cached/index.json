@@ -3,6 +3,14 @@
     "propertyId": "prop-demo-house-001",
     "address": "12 Example Row, Demo Town (fictional)",
     "file": "prop-demo-house-001.json",
-    "liveMeta": false
+    "liveMeta": false,
+    "thumbnail": "cached/prop-demo-house-001-media-plan-ground.svg",
+    "bedrooms": 3,
+    "areaSqM": 130,
+    "price": {
+      "amount": 1650,
+      "currency": "GBP",
+      "period": "pcm"
+    }
   }
 ]

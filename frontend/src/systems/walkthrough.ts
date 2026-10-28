@@ -18,6 +18,9 @@ const SNAP_TURN = Math.PI / 6;
 
 let segments: [Vec2, Vec2][] = [];
 
+/** Touch joystick input (-1..1); y is down-positive like screen space. */
+export const virtualStick = { x: 0, y: 0 };
+
 export function enterRoom(world: World, roomId: string): boolean {
   const scene = app.scene.value;
   const m = mounted(world);
@@ -74,7 +77,7 @@ let orbit: OrbitControls | null = null;
 export function resetOrbit(world: World) {
   // Portrait screens need the camera further back to fit the house.
   const el = world.renderer.domElement;
-  const k = el.clientWidth && el.clientHeight < el.clientWidth ? 1 : 1.7;
+  const k = el.clientWidth && el.clientHeight < el.clientWidth ? 1 : 2.1;
   world.camera.position.set(0.45 * k, 1.12 + 0.88 * k, -0.8 + 0.85 * k);
   world.camera.rotation.set(0, 0, 0);
   orbit?.target.set(0, 1.12, -0.8);
@@ -169,6 +172,8 @@ export class WalkthroughSystem extends createSystem({}) {
       if (keys.has('s') || keys.has('arrowdown')) fwd -= 1;
       if (keys.has('d') || keys.has('arrowright')) strafe += 1;
       if (keys.has('a') || keys.has('arrowleft')) strafe -= 1;
+      fwd -= virtualStick.y;
+      strafe += virtualStick.x;
       this.head.set(this.player.position.x, 0, this.player.position.z);
     }
     if (!fwd && !strafe) return;

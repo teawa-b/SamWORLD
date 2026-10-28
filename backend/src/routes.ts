@@ -8,7 +8,7 @@ import { RoomMappingPatch, SceneCorrectionPatch, type ReconstructionRun } from '
 import { capabilities, config, metaConfigured } from './config.js';
 import { AiBudget } from './meta/client.js';
 import { redesignRoom, REDESIGN_PROMPT_VERSION } from './meta/image.js';
-import { FIXTURE_PROVIDER, importFixture, resolveStorageKey, searchFixtures } from './providers/fixture.js';
+import { FIXTURE_PROVIDER, fixtureThumbnail, importFixture, resolveStorageKey, searchFixtures } from './providers/fixture.js';
 import { realtyStatus, searchRealty } from './providers/realtyapi.js';
 import { ProviderUnavailableError } from './providers/types.js';
 import { store } from './store.js';
@@ -80,6 +80,12 @@ export async function registerRoutes(app: FastifyInstance) {
       else throw e;
     }
     return { results, providerNotice };
+  });
+
+  app.get('/api/listings/fixture/:listingId/thumbnail', async (req, reply) => {
+    const t = fixtureThumbnail(parse(Id, (req.params as { listingId: string }).listingId));
+    if (!t) throw new HttpError(404, 'NOT_FOUND', 'No thumbnail');
+    return sendFile(reply, t.path, t.mime);
   });
 
   app.post('/api/properties/import', async (req) => {

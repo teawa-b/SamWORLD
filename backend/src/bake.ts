@@ -13,7 +13,7 @@ import { store } from './store.js';
 
 await store.load();
 await mkdir(config.bakeOutDir, { recursive: true });
-const index: { propertyId: string; address: string; file: string; liveMeta: boolean }[] = [];
+const index: { propertyId: string; address: string; file: string; liveMeta: boolean; thumbnail: string | null; bedrooms: number | null; areaSqM: number | null; price: unknown }[] = [];
 for (const r of searchFixtures('')) {
   const id = `prop-${r.listingId}`;
   const imported = importFixture(r.listingId, id, new Date().toISOString())!;
@@ -40,7 +40,17 @@ for (const r of searchFixtures('')) {
   }
   const file = `${id}.json`;
   await writeFile(join(config.bakeOutDir, file), JSON.stringify(scene));
-  index.push({ propertyId: id, address: scene.property.address, file, liveMeta: scene.evidenceFlags.liveMetaInference });
+  const firstPlan = scene.media.find((m) => m.type === 'floorplan');
+  index.push({
+    propertyId: id,
+    address: scene.property.address,
+    file,
+    liveMeta: scene.evidenceFlags.liveMetaInference,
+    thumbnail: (firstPlan?.metadata.staticUrl as string | undefined) ?? null,
+    bedrooms: scene.property.bedrooms,
+    areaSqM: scene.property.areaSqM,
+    price: scene.property.price,
+  });
   console.log(`baked ${file}`);
 }
 await writeFile(join(config.bakeOutDir, 'index.json'), JSON.stringify(index, null, 2));

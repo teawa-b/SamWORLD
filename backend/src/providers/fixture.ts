@@ -49,7 +49,7 @@ export function searchFixtures(q: string): (Omit<SearchResult, 'importedProperty
       areaSqM: listing.areaSqM,
       hasFloorplan: listing.media.some((m) => m.type === 'floorplan'),
       photoCount: listPhotos(dir).length,
-      thumbnailUrl: null,
+      thumbnailUrl: listing.media.some((m) => m.type === 'floorplan') ? `/api/listings/fixture/${listing.sourceListingId}/thumbnail` : null,
       attribution: listing.sourceInfo.attribution,
     }));
 }
@@ -134,6 +134,15 @@ export function importFixture(listingId: string, propertyId: string, now: string
     updatedAt: now,
   };
   return { property, media };
+}
+
+/** First floor-plan image of a fixture listing (raster if available). */
+export function fixtureThumbnail(listingId: string): { path: string; mime: string } | null {
+  const f = fixtures().find((x) => x.listing.sourceListingId === listingId);
+  const plan = f?.listing.media.find((m) => m.type === 'floorplan');
+  if (!f || !plan) return null;
+  const png = join(f.dir, plan.file.replace(/\.svg$/, '.png'));
+  return existsSync(png) ? { path: png, mime: 'image/png' } : { path: join(f.dir, plan.file), mime: plan.mimeType };
 }
 
 export function fixtureFile(listingId: string, name: string): unknown | null {

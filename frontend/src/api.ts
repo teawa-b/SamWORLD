@@ -29,6 +29,7 @@ export interface SearchResult {
   photoCount: number;
   attribution: string;
   importedPropertyId: string | null;
+  thumbnailUrl?: string | null;
 }
 
 export class ApiError extends Error {
@@ -63,11 +64,11 @@ export const api = {
   },
   async search(q: string): Promise<{ results: SearchResult[]; providerNotice: string | null }> {
     if (staticMode) {
-      const idx: { propertyId: string; address: string; file: string }[] = await (await fetch(`${STATIC}index.json`)).json();
+      const idx: { propertyId: string; address: string; file: string; thumbnail?: string | null; bedrooms?: number | null; areaSqM?: number | null; price?: Property['price'] }[] = await (await fetch(`${STATIC}index.json`)).json();
       return {
         results: idx
           .filter((i) => i.address.toLowerCase().includes(q.toLowerCase()))
-          .map((i) => ({ provider: 'cached', listingId: i.propertyId, address: i.address, price: null, bedrooms: null, areaSqM: null, hasFloorplan: true, photoCount: 0, attribution: 'Baked scene', importedPropertyId: i.propertyId })),
+          .map((i) => ({ provider: 'cached', listingId: i.propertyId, address: i.address, price: i.price ?? null, bedrooms: i.bedrooms ?? null, areaSqM: i.areaSqM ?? null, hasFloorplan: true, photoCount: 0, attribution: 'Baked scene', importedPropertyId: i.propertyId, thumbnailUrl: i.thumbnail ? `${import.meta.env.BASE_URL}${i.thumbnail}` : null })),
         providerNotice: 'Static demo: the API is not running, showing pre-baked scenes only.',
       };
     }
