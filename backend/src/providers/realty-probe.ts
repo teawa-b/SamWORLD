@@ -36,6 +36,47 @@ function shape(spec: any, schema: any, depth = 0): unknown {
   return s.type ?? (s.oneOf || s.anyOf ? 'union' : '?');
 }
 
+/** Field names and value types only (strings truncated), so logs carry structure, not data. */
+function keysOf(v: unknown, depth = 0): unknown {
+  if (Array.isArray(v)) return v.length ? [keysOf(v[0], depth + 1), `…${v.length}`] : [];
+  if (v && typeof v === 'object') {
+    if (depth > 4) return '{…}';
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).slice(0, 60).map(([k, x]) => [k, keysOf(x, depth + 1)]));
+  }
+  if (typeof v === 'string') return /^https?:/.test(v) ? `url(${v.split('/')[2]})` : `str(${v.length})`;
+  return typeof v;
+}
+
+async function getJson(url: string): Promise<unknown> {
+  const r = await fetch(url, { headers: { accept: 'application/json', 'x-realtyapi-key': config.realty.apiKey }, signal: AbortSignal.timeout(45000) });
+  const t = await r.text();
+  try {
+    return JSON.parse(t);
+  } catch {
+    return `HTTP ${r.status} ${t.slice(0, 120)}`;
+  }
+}
+
+/** REALTYAPI_PROBE=2: one sample search + details per provider (spends ~7 calls). */
+export async function sampleRealty(log: Log) {
+  const samples: [string, string, (first: any) => string[]][] = [
+    ['zoopla', '/search/bycoordinates?latitude=51.5074&longitude=-0.1278&radius=1&searchType=To_Rent', (f) => [`/details/byid?listingId=${f?.listingId ?? f?.id ?? ''}`, `/images?listingId=${f?.listingId ?? f?.id ?? ''}`]],
+    ['zillow', '/search/bycoordinates?latitude=40.7128&longitude=-74.0060&radius=1&listingStatus=For_Rent', (f) => [`/byzpid?zpid=${f?.zpid ?? f?.property?.zpid ?? ''}`, `/propimages?byzpid=${f?.zpid ?? f?.property?.zpid ?? ''}`]],
+    ['realtor', '/search/bycoordinates?latitude=40.7128&longitude=-74.0060&radius=1&searchType=For_Rent&resultCount=5', (f) => [`/details/byid?property_id=${f?.property_id ?? f?.propertyId ?? ''}${f?.listing_id ? `&listing_id=${f.listing_id}` : ''}`]],
+  ];
+  for (const [p, search, next] of samples) {
+    const res: any = await getJson(`https://${p}.realtyapi.io${search}`);
+    log(`[realty-sample] ${p} search shape`, keysOf(res));
+    const list = Array.isArray(res) ? res : Object.values(res ?? {}).find((v) => Array.isArray(v)) ?? res?.data?.results ?? res?.data?.home_search?.results ?? [];
+    const first = (list as any[])[0];
+    for (const path of next(first)) {
+      const d = await getJson(`https://${p}.realtyapi.io${path}`);
+      log(`[realty-sample] ${p} ${path.split('?')[0]} shape`, keysOf(d));
+    }
+  }
+  log('[realty-sample] done');
+}
+
 export async function probeRealty(log: Log) {
   const llms = await getText('https://www.realtyapi.io/llms.txt');
   log('[realty-probe] llms.txt lines', (llms ?? '').split('\n').filter((l) => /realtyapi\.io|provider|zoopla|zillow|realtor|redfin|rightmove/i.test(l)).slice(0, 80));
