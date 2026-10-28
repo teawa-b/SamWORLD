@@ -36,6 +36,7 @@ import {
 import { config, metaConfigured } from '../config.js';
 import { imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
 import { AiBudget } from '../meta/client.js';
+import { resolveModels } from '../meta/models.js';
 import { assembleInterpretation, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, furnishRooms, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
 import { segmentConcept } from '../meta/sam.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
@@ -102,6 +103,13 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   const corrections = store.get('roomMappings', property.id);
   const isFixture = property.sourceProvider === FIXTURE_PROVIDER;
   const live = metaConfigured();
+  if (live) {
+    const r = await resolveModels();
+    if (r.changed.length) await ctx.log('ingest', `Using the models this API key offers: ${r.changed.join('; ')}`);
+    if (r.available && !r.available.includes(config.meta.museModel)) {
+      throw new PipelineError('NO_MUSE_MODEL', `This Meta API key has no Muse model. Available: ${r.available.join(', ') || 'none'}`);
+    }
+  }
   run.modelVersions = live ? { muse: config.meta.museModel, sam: config.meta.samModel } : {};
   run.promptVersions = live ? PROMPT_VERSIONS : {};
 

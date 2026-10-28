@@ -17,6 +17,10 @@ let levelCalls = 0;
 
 const read = (req: IncomingMessage) => new Promise<string>((r) => { let s = ''; req.on('data', (c) => (s += c)); req.on('end', () => r(s)); });
 const fake = createServer(async (req, res) => {
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    res.setHeader('content-type', 'application/json');
+    return res.end(JSON.stringify({ object: 'list', data: ['muse-spark-1.3', 'sam-3.1', 'muse-image-1.0'].map((id) => ({ id, object: 'model', created: 0, owned_by: 'meta' })) }));
+  }
   const body = JSON.parse(await read(req));
   requests.push({ path: req.url!, body });
   const name = body.response_format?.json_schema?.name;

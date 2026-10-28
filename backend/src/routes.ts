@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import { lastResolution } from './meta/models.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -66,7 +67,7 @@ export async function registerRoutes(app: FastifyInstance) {
     reply.status(status).send({ error: { code: e.code ?? 'INTERNAL', message: status >= 500 && !(e instanceof HttpError) ? 'Internal error' : e.message } });
   });
 
-  app.get('/health', async () => ({ ok: true, time: now(), capabilities: capabilities(), realtyApi: realtyStatus() }));
+  app.get('/health', async () => ({ ok: true, time: now(), capabilities: capabilities(), realtyApi: realtyStatus(), metaModels: lastResolution && { available: lastResolution.available, changed: lastResolution.changed, error: lastResolution.error ?? null } }));
 
   app.get('/api/properties/search', async (req) => {
     const { q } = parse(z.object({ q: z.string().max(200).default('') }), req.query);
