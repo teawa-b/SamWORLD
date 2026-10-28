@@ -18,7 +18,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   await store.load();
   const app = await buildApp();
   if (config.workerInline) {
-    await recoverStaleRuns();
+    await recoverStaleRuns({ all: true }); // inline worker: nothing can still be running after a restart
     startRunner();
   }
   await app.listen({ port: config.port, host: config.host });

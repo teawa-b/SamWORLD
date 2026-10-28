@@ -14,8 +14,9 @@ const ACTIVE: ReconstructionRun['state'][] = ['INGESTED', 'STRUCTURE_PARSED', 'S
 let busy = false;
 let timer: NodeJS.Timeout | null = null;
 
-export async function recoverStaleRuns(): Promise<void> {
-  const cutoff = Date.now() - config.jobs.staleAfterMs;
+/** `all`: re-queue every unfinished run (safe when this process is the only worker and has just started). */
+export async function recoverStaleRuns(opts: { all?: boolean } = {}): Promise<void> {
+  const cutoff = opts.all ? Infinity : Date.now() - config.jobs.staleAfterMs;
   for (const run of Object.values(store.all('runs'))) {
     if (!ACTIVE.includes(run.state)) continue;
     if (run.heartbeatAt && Date.parse(run.heartbeatAt) > cutoff) continue;
