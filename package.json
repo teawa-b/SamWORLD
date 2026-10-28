@@ -1,26 +1,15 @@
 {
-  "name": "shroozy-propertyxr",
-  "version": "0.1.0",
+  "name": "walk-in",
   "private": true,
-  "type": "module",
-  "workspaces": [
-    "shared",
-    "api",
-    "app-web"
-  ],
+  "description": "WalkIn: convenience scripts only. frontend/ and backend/ are installed and deployed separately.",
   "scripts": {
-    "dev:api": "npm run dev -w api",
-    "dev:web": "npm run dev:runtime -w app-web",
-    "build": "npm run build -w shared && npm run build -w app-web",
-    "typecheck": "npm run typecheck -w shared && npm run typecheck -w api && npm run typecheck -w app-web",
-    "test": "npm test -w shared && npm test -w api",
-    "fixture:bake": "npm run bake -w api"
-  },
-  "engines": {
-    "node": ">=22.12.0"
-  },
-  "overrides": {
-    "sharp": "0.35.4",
-    "three": "npm:super-three@0.181.0"
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev:runtime",
+    "bake": "npm --prefix backend run bake",
+    "sync-shared": "node scripts/sync-shared.mjs",
+    "check-shared": "node scripts/sync-shared.mjs --check",
+    "test": "npm --prefix backend test && node scripts/sync-shared.mjs --check",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck"
   }
 }

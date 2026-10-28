@@ -1,4 +1,6 @@
-# Shroozy PropertyXR (working name)
+# WalkIn
+
+_Working name: `walk-in`. A Shroozy project._
 
 Turns a property listing's **floor plan, photos and video** into a labelled 3D
 home you can explore in a desktop browser and in **Meta Quest Browser (WebXR)**:
@@ -44,12 +46,20 @@ Screenshots from headless Chromium (desktop) and the IWER emulator (XR):
 
 ## Quick start
 
+`frontend/` and `backend/` are separate apps with their own `package.json`,
+lockfile and deployment. Install and run each one:
+
 ```bash
-npm install
-cp .env.example api/.env        # optional; add MODEL_API_KEY for live Meta inference
-npm run dev:api                 # http://localhost:8787
-npm run dev:web                 # https://localhost:8081 (self-signed; Vite proxies /api)
+cd backend && npm install
+cp .env.example .env            # optional; add MODEL_API_KEY for live Meta inference
+npm run dev                     # http://localhost:8787
+
+cd ../frontend && npm install
+npm run dev:runtime             # https://localhost:8081 (self-signed; Vite proxies /api to :8787)
 ```
+
+From the repo root, `npm run install:all`, `npm run dev:backend` and
+`npm run dev:frontend` do the same.
 
 Open https://localhost:8081, search "example", choose the listing, and click
 **Explore in 3D**. On localhost the IWSDK dev plugin injects the IWER XR
@@ -59,7 +69,7 @@ To run the reconstruction once and bake static scenes (the viewer then works
 without the API, e.g. on static hosting):
 
 ```bash
-npm run fixture:bake            # writes app-web/public/cached/
+cd backend && npm run bake      # writes ../frontend/public/cached/ (or BAKE_OUT_DIR)
 ```
 
 ### Controls
@@ -80,14 +90,20 @@ npm run fixture:bake            # writes app-web/public/cached/
 ## Repository layout
 
 ```text
-shared/         Zod data contracts, plan→structure geometry, placement engine, verification (+ tests)
-api/            Fastify API, job runner, Meta adapters, fixture + RealtyAPI providers, bake script (+ tests)
-app-web/        IWSDK + Vite app: scene builder, dollhouse/walkthrough/menu systems, 2D UI
+frontend/       Deployable web app (IWSDK + Vite): scene builder, dollhouse/walkthrough/menu systems, 2D UI
+  src/shared/   Synced copy of backend/src/shared (do not edit here)
+backend/        Deployable API + job worker (Fastify), Meta adapters, providers, bake script, tests
+  src/shared/   Source of truth: Zod contracts, plan→structure geometry, placement, verification
+  fixtures/     Project-owned demo property (plan SVG/PNG, reference interpretation, placements)
+  Dockerfile    Container image for the backend
 worker-3d/      Optional SAM 3D Objects worker for Modal (not deployed)
-test-fixtures/  Project-owned demo property (plan SVG/PNG, reference interpretation, placements)
+scripts/        sync-shared.mjs: copies backend/src/shared to the frontend (--check for CI)
 db/             Supabase/Postgres schema for when the JSON store is replaced
 docs/           Meta API notes, Modal runbook, RealtyAPI, deployment, data rights
 ```
+
+Shared contracts are edited in `backend/src/shared/` and copied with
+`npm run sync-shared`. `npm test` at the root fails if the copies drift.
 
 ## Pipeline
 
@@ -105,8 +121,8 @@ Each run is capped at `AI_MAX_CALLS_PER_RUN`, and every call has a timeout and b
 ## Tests
 
 ```bash
-npm test          # shared geometry/placement + API integration (offline and fake-Meta live path)
-npm run typecheck
+cd backend && npm test      # geometry/placement + API integration (offline and fake-Meta live path)
+npm run typecheck           # in either folder
 ```
 
 ## Docs
@@ -120,5 +136,5 @@ npm run typecheck
 ## Attribution
 
 - Immersive Web SDK, Three.js (super-three), UIKit (pmndrs): see their licences in `node_modules`.
-- `@meta-sam/parser` and the request patterns in `api/src/meta/` follow Meta's `meta-model-cookbook`.
+- `@meta-sam/parser` and the request patterns in `backend/src/meta/` follow Meta's `meta-model-cookbook`.
 - Demo floor plans were drawn for this project. The address and figures are fictional.

@@ -17,7 +17,7 @@ Deploy (only after the billing checks in docs/modal-sam3d.md):
     modal secret create huggingface HF_TOKEN=<token with checkpoint access>
     modal deploy worker-3d/app.py
 Stop everything:
-    modal app stop propertyxr-sam3d
+    modal app stop walk-in-sam3d
 """
 import base64
 import io
@@ -44,7 +44,7 @@ image = (
 )
 
 weights = modal.Volume.from_name("sam3d-checkpoints", create_if_missing=True)
-app = modal.App("propertyxr-sam3d")
+app = modal.App("walk-in-sam3d")
 
 
 @app.cls(

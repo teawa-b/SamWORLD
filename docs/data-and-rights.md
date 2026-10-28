@@ -1,6 +1,6 @@
 # Data sources, rights and user trust
 
-- **Demo property:** drawn by the project (`test-fixtures/demo-house`). The address and figures are fictional, so it is free to transform and send to models. It ships with **no photos**. Add only licensed or permission-granted photos to `photos/`.
+- **Demo property:** drawn by the project (`backend/fixtures/demo-house`). The address and figures are fictional, so it is free to transform and send to models. It ships with **no photos**. Add only licensed or permission-granted photos to `photos/`.
 - **Listing data:** a publicly visible plan or photo is not automatically reusable. Check RealtyAPI's terms and the underlying portal's terms before storing, altering or showing media. Media defaults to `unverified` and is then never sent to a model.
 - **Labelling:** the UI always shows "AI reconstruction — dimensions approximate". Each room shows whether its size was printed or inferred and whether a photo supports it. The Evidence tab names the method behind every layer (live Meta, hand-authored fixture, manual correction, deterministic).
 - **No personal data:** no owner or tenant information is inferred or stored.

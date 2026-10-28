@@ -44,4 +44,4 @@ another.
 ## Shut-off
 
 - Backend: `SAM3D_ENABLED=false` (single switch).
-- Worker: `modal app stop propertyxr-sam3d`. Confirm with `modal app list`.
+- Worker: `modal app stop walk-in-sam3d`. Confirm with `modal app list`.

@@ -1,5 +1,5 @@
--- Postgres (Supabase) schema mirroring shared/src/schemas.ts.
--- NOT yet used: the prototype persists to JSON files (api/src/store.ts).
+-- Postgres (Supabase) schema mirroring backend/src/shared/schemas.ts.
+-- NOT yet used: the prototype persists to JSON files (backend/src/store.ts).
 -- Large structured blobs stay JSONB; they are validated by the Zod schemas.
 
 create table properties (

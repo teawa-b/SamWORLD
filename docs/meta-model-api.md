@@ -1,6 +1,6 @@
 # Meta Model API usage
 
-All calls are server-side (`api/src/meta/`) through the official `openai` SDK
+All calls are server-side (`backend/src/meta/`) through the official `openai` SDK
 pointed at `https://api.meta.ai/v1`, as in Meta's
 [meta-model-cookbook](https://github.com/meta-models/meta-model-cookbook).
 `MODEL_API_KEY` is read from the environment only. It is never logged,
@@ -9,8 +9,8 @@ serialised into scenes or sent to the browser.
 > **Status:** these adapters have **not yet run against the real API**. The
 > sandbox they were written in had no key and no route to `api.meta.ai`. Shapes
 > follow the cookbook (structured output, vision input, SAM API basics, Muse
-> Image editing) and are checked by `api/test/meta-live-path.test.ts` against a
-> local fake. First real run: set the key, run `npm run bake -w api -- --reparse`,
+> Image editing) and are checked by `backend/test/meta-live-path.test.ts` against a
+> local fake. First real run: set the key, run `npm run bake -- --reparse` in `backend/`,
 > and read the run log.
 
 ## Calls
@@ -26,15 +26,15 @@ serialised into scenes or sent to the browser.
 
 Notes from the cookbook that the code relies on:
 - Images are accepted **only in `user` messages** (a 400 otherwise).
-- Supported image types: jpeg, png, gif, webp. **SVG is not accepted**, so plans are rasterised (`test-fixtures/demo-house/render-png.cjs`).
+- Supported image types: jpeg, png, gif, webp. **SVG is not accepted**, so plans are rasterised (`backend/fixtures/demo-house/render-png.cjs`).
 - Roughly 50 images per request, 50 MB per inline image.
 - On the Responses API, structured output uses `text.format`, not `response_format`. Only Chat Completions uses `response_format` here.
 - SAM: "one short noun phrase per request". A completed request with zero masks is a valid empty result.
 
 ## What the models are and are not trusted with
 
-- Muse outputs **plan-pixel polygons, dimension text and relationships**. Code converts them to meters, aligns vertices, derives walls and validates everything (`shared/src/geometry.ts`, `verify.ts`).
-- Placement suggestions are **never executed blindly**. `shared/src/placement.ts` re-derives positions inside the room polygon and rejects collisions or blocked doorways.
+- Muse outputs **plan-pixel polygons, dimension text and relationships**. Code converts them to meters, aligns vertices, derives walls and validates everything (`backend/src/shared/geometry.ts`, `verify.ts`).
+- Placement suggestions are **never executed blindly**. `backend/src/shared/placement.ts` re-derives positions inside the room polygon and rejects collisions or blocked doorways.
 - SAM masks are 2D evidence only. They are not 3D positions.
 - Muse Image output is labelled as a conceptual 2D image and never changes the 3D scene.
 

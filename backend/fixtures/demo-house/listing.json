@@ -1,0 +1,42 @@
+{
+  "sourceProvider": "fixture",
+  "sourceListingId": "demo-house-001",
+  "listingUrl": null,
+  "address": "12 Example Row, Demo Town (fictional)",
+  "location": null,
+  "status": "to-let",
+  "price": {
+    "amount": 1650,
+    "currency": "GBP",
+    "period": "pcm"
+  },
+  "bedrooms": 3,
+  "areaSqM": 130,
+  "areaEvidence": "Stated on the demo listing sheet (fictional figure, approx. 1,400 sq ft gross).",
+  "sourceInfo": {
+    "attribution": "Demo property drawn by the Shroozy team",
+    "rightsNote": "Project-owned test drawing; free to transform and send to models."
+  },
+  "missingData": [
+    "No listing photos supplied \u2014 add licensed photos to backend/fixtures/demo-house/photos/ to enable photo matching and SAM 3.1 segmentation.",
+    "No listing video.",
+    "No historical imagery.",
+    "Ceiling heights not stated."
+  ],
+  "media": [
+    {
+      "id": "media-plan-ground",
+      "type": "floorplan",
+      "file": "plan-ground.svg",
+      "mimeType": "image/svg+xml",
+      "levelGuess": "L0"
+    },
+    {
+      "id": "media-plan-first",
+      "type": "floorplan",
+      "file": "plan-first.svg",
+      "mimeType": "image/svg+xml",
+      "levelGuess": "L1"
+    }
+  ]
+}
