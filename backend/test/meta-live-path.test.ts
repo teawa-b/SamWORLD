@@ -4,7 +4,8 @@
  * inference and proves nothing about model quality.
  */
 import { createServer, type IncomingMessage } from 'node:http';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { deflateSync, crc32 } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -31,6 +32,15 @@ const fake = createServer(async (req, res) => {
       stairs: lvl.stairs.map((s: any) => ({ id: strip(s.id), polygonPx: s.polygonPx, goesUp: true, confidence: s.confidence })),
       uncertainties: ['fake'],
     };
+  } else if (name === 'photo_room_matches') {
+    content = { photos: [{ photoIndex: 0, roomId: 'L0-living', confidence: 0.9, evidence: ['fake'], visibleObjects: ['sofa'] }] };
+  } else if (name === 'room_surfaces') {
+    content = {
+      wall: { colorHex: '#e8e2d6', material: 'paint', photoIndex: 0, box: [0.1, 0.05, 0.5, 0.35], patchSizeM: 1.2, confidence: 0.8 },
+      floor: { colorHex: '#a87b4f', material: 'wood', photoIndex: 0, box: [0.2, 0.7, 2, 0.95], patchSizeM: 1, confidence: 0.7 },
+    };
+  } else if (name === 'room_placements') {
+    content = { objects: [] };
   } else if (name === 'reconstruction_review') {
     content = { findings: [{ severity: 'pass', message: 'Room count matches the plan (fake reviewer)', roomIds: [] }] };
   }
@@ -45,6 +55,11 @@ beforeAll(async () => {
   process.env.META_BASE_URL = `http://127.0.0.1:${(fake.address() as AddressInfo).port}/v1`;
   process.env.MODEL_API_KEY = 'test-key-not-real';
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'walkin-live-'));
+  // Copy the fixtures and add one generated photo, pre-assigned to the living room.
+  const fx = mkdtempSync(join(tmpdir(), 'walkin-fx-'));
+  cpSync(new URL('../fixtures', import.meta.url), fx, { recursive: true });
+  writeFileSync(join(fx, 'demo-house/photos/L0-living__test.png'), solidPng(64, 48, [200, 170, 120]));
+  process.env.FIXTURES_DIR = fx;
   process.env.LOG_LEVEL = 'silent';
   const { store } = await import('../src/store.js');
   await store.load();
@@ -63,7 +78,8 @@ describe('live Meta path (against a fake endpoint)', () => {
     await drain();
     const job = (await app.inject({ url: `/api/reconstruction-jobs/${jobId}` })).json();
     expect(job.state, JSON.stringify(job.logs)).toBe('READY');
-    expect(job.aiCalls).toBe(3); // 2 plan levels + 1 verification pass
+    // 2 plan levels + photo match + surfaces + placement + SAM attempts + verification
+    expect(job.aiCalls).toBeGreaterThanOrEqual(6);
 
     const planReq = requests.find((r) => r.body.response_format?.json_schema?.name === 'floorplan_level')!;
     expect(planReq.path).toBe('/v1/chat/completions');
@@ -79,5 +95,30 @@ describe('live Meta path (against a fake endpoint)', () => {
     expect(scene.verification.visualReview.status).toBe('completed');
     expect(scene.structure.rooms.map((r: any) => r.id)).toContain('L0-living');
     expect(scene.verification.geometry.filter((c: any) => c.severity === 'fail')).toEqual([]);
+
+    // Finishes read from the photo; the out-of-range floor box falls back to colour only.
+    const living = scene.roomSurfaces.find((r: any) => r.roomId === 'L0-living');
+    expect(living.wall.texture.patchSizeM).toBe(1.2);
+    expect(living.wall.texture.mediaId).toMatch(/photo-0$/);
+    expect(living.floor.texture).toBeNull();
+    expect(living.floor.colorHex).toBe('#a87b4f');
+    expect(scene.evidenceFlags.surfacesFromPhotos).toBe(1);
   });
 });
+
+function solidPng(w: number, h: number, rgb: number[]): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body) >>> 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w }, () => rgb).flat())]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.concat(Array.from({ length: h }, () => row)))), chunk('IEND', Buffer.alloc(0))]);
+}

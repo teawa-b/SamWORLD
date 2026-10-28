@@ -10,5 +10,7 @@ export const LevelHandle = createComponent('LevelHandle', {
 export const RoomFloor = createComponent('RoomFloor', { roomId: { type: Types.String, default: '' } });
 export const WallPanel = createComponent('WallPanel', { wallId: { type: Types.String, default: '' } });
 export const PropertyRoot = createComponent('PropertyRoot', {});
+/** Tap-to-move look-around point. */
+export const Hotspot = createComponent('Hotspot', { viewpointId: { type: Types.String, default: '' } });
 
-export default defineComponents([Plinth, LevelHandle, RoomFloor, WallPanel, PropertyRoot]);
+export default defineComponents([Plinth, LevelHandle, RoomFloor, WallPanel, PropertyRoot, Hotspot]);

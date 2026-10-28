@@ -26,7 +26,8 @@ endpoint, but they still need a first real run with your key.
 | Area | Status |
 | --- | --- |
 | IWSDK app: desktop 3D, dollhouse, floor separation, roof, wall pull-out, reset, day/night, empty rooms, evidence colours | **Working** (checked in headless Chromium) |
-| Walkthrough: enter a room at 1:1, wall collision, open doorways, up/down stairs | **Working** on desktop. XR thumbstick locomotion is written but **not tested on a headset** |
+| Walkthrough: enter a room at 1:1, tap white circles to glide between look-around points (rooms, doorways, stairs), drag to look | **Working** on phone and desktop (headless browser). Same markers work with the VR controller trigger, plus thumbstick moves; **not tested on a headset** |
+| Wall & floor textures | **Working.** With photos + `MODEL_API_KEY`, Muse Spark reads each room's finishes and picks a clean patch of wall and floor; the browser crops it from the real photo and tiles it. Rooms without photos (including the demo) use labelled default finishes by room type. Photo path verified with a synthetic test photo, **not yet with a real listing** |
 | WebXR session + in-headset menu | **Working in the IWER emulator**. Hand/controller grab of the plinth and lift handles is **not yet tested on a real Quest** |
 | Plan → structure (scale from printed dimensions, walls from room polygons, door/window gaps, stairs, roof) | **Working**, deterministic, unit-tested |
 | Placement engine (containment, doorway clearance, collisions) and geometry verification | **Working**, unit-tested |
@@ -83,7 +84,7 @@ cd backend && npm run bake      # writes ../frontend/public/cached/ (or BAKE_OUT
 | Hide all walls / pull one wall | `W` / `P`, then click a wall | menu / trigger on a wall |
 | Empty rooms, night, evidence colours | `F`, `N`, `V` | menu |
 | Select / enter a room | click its floor, then `E` | trigger on the floor, then **Enter room** |
-| Walk | drag to look, `WASD` | left stick move, right stick snap turn |
+| Walk | tap/click a white circle to move, drag to look, `WASD` on desktop | trigger on a circle, left stick move, right stick snap turn |
 | Back to dollhouse | `Esc` | menu |
 | Reset | `R` | menu |
 
@@ -110,7 +111,7 @@ Shared contracts are edited in `backend/src/shared/` and copied with
 1. **Ingest** the listing, keeping provenance and usage rights. Media marked `unverified` is never sent to a model.
 2. **Parse the plan**: Muse Spark returns room polygons (plan pixels), printed dimensions, doors, windows and stairs as schema-constrained JSON. Without a key, the demo uses its reference interpretation.
 3. **Build the structure**: deterministic. Scale comes from printed dimensions (median across rooms), noisy vertices are aligned, walls are derived from shared room edges, openings become real gaps, and floors stack with an estimated 2.4 m ceiling when none is printed. The shell is published straight away.
-4. **Match photos to rooms** (Muse). Manual assignments override it.
+4. **Match photos to rooms** (Muse), then **read each photographed room's wall and floor finish** (colour, material and a clean patch to sample for textures). Manual assignments override the matching.
 5. **Segment** matched photos with SAM 3.1, one noun phrase per request, decoded by `@meta-sam/parser`.
 6. **Place furniture**: Muse suggests relationships ("against the north wall, 30% along"), and the placement engine turns them into coordinates, rejecting anything outside the room, blocking a doorway or overlapping. Walls never move.
 7. **Verify**: geometry checks (closure, overlaps, printed dimensions within 5%, area against the listing, connectivity, collisions), then a Muse review against the plan.

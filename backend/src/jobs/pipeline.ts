@@ -24,6 +24,7 @@ import {
   type MediaRoomMatch,
   type PropertyMedia,
   type ReconstructionRun,
+  type RoomSurfaces,
   type SceneObject,
   type StepLog,
   type Structure,
@@ -32,7 +33,7 @@ import {
 import { config, metaConfigured } from '../config.js';
 import { imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
 import { AiBudget } from '../meta/client.js';
-import { assembleInterpretation, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
+import { assembleInterpretation, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
 import { segmentConcept } from '../meta/sam.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
 import { store } from '../store.js';
@@ -148,6 +149,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     photoEvidence: 'none',
     segmentationBy: null,
     sam3d: 'disabled',
+    surfacesFromPhotos: 0,
     ceilingHeightEstimated: structure.levels.some((l) => l.heightEstimated),
     scaleEstimated: structure.scale.estimated,
     notes: [],
@@ -186,6 +188,23 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   }
   for (const room of structure.rooms) room.linkedMediaIds = matches.filter((m) => m.roomId === room.id).map((m) => m.mediaId);
   const roomsWithPhotos = structure.rooms.filter((r) => r.linkedMediaIds.length).length;
+
+  // Wall/floor appearance from photos, used to texture the model.
+  const roomSurfaces: RoomSurfaces[] = [];
+  if (live) {
+    for (const room of structure.rooms.filter((r) => r.linkedMediaIds.length)) {
+      const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 4);
+      try {
+        roomSurfaces.push(
+          await readRoomSurfaces({ budget, roomId: room.id, roomLabel: room.label, photos: roomPhotos.map((p) => ({ mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType) })) }),
+        );
+      } catch (e) {
+        await ctx.log('match', `Reading finishes for ${room.label} failed: ${(e as Error).message}`, 'warn');
+        if ((e as { code?: string }).code === 'AI_BUDGET_EXCEEDED') break;
+      }
+    }
+    if (roomSurfaces.length) await ctx.log('match', `Wall and floor finishes read from photos for ${roomSurfaces.length} room(s)`);
+  }
   await ctx.setState('MEDIA_MATCHED', 'match', 0.5);
 
   // ---- 5. Segmentation -----------------------------------------------------------
@@ -295,14 +314,16 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     photoEvidence: roomsWithPhotos === 0 ? 'none' : roomsWithPhotos === structure.rooms.length ? 'all-rooms' : 'partial',
     segmentationBy: detections.length ? 'meta:sam-3.1' : null,
     sam3d: sam3dState,
+    surfacesFromPhotos: roomSurfaces.length,
     notes: [
+      ...(roomSurfaces.length < structure.rooms.length ? [`${structure.rooms.length - roomSurfaces.length} room(s) use default finishes for their room type (no photo to sample).`] : []),
       ...(interp.provenance.method === 'fixture:hand-authored' ? ['Floor plan geometry comes from a hand-authored reference reading, not live Muse inference.'] : []),
       ...(objects.some((o) => o.provenance.note?.includes('fixture')) ? ['Some furniture positions come from hand-authored suggestions, not photo evidence.'] : []),
       'Furniture is represented by proxy shapes sized from estimates.',
       ...interp.uncertainties,
     ],
   };
-  const final = manifest(property.id, prevVersion + 1, true, structure, objects, matches, detections, { geometry, visualReview }, flags, media);
+  const final = manifest(property.id, prevVersion + 1, true, structure, objects, matches, detections, { geometry, visualReview }, flags, media, roomSurfaces);
   await store.put('scenes', property.id, final);
   run.outputSceneVersion = final.sceneVersion;
   run.finishedAt = now();
@@ -415,6 +436,7 @@ function manifest(
   verification: VerificationReport,
   evidenceFlags: EvidenceFlags,
   media: PropertyMedia[],
+  roomSurfaces: RoomSurfaces[] = [],
 ): SceneManifest {
   const b = structure.footprintBounds;
   const cx = (b.min[0] + b.max[0]) / 2;
@@ -434,6 +456,7 @@ function manifest(
     objects,
     mediaMatches,
     detections,
+    roomSurfaces,
     verification,
     evidenceFlags,
     previewCamera: { position: [cx + span * 0.9, span * 1.1, cz + span * 1.3], target: [cx, 1.2, cz] },

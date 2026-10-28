@@ -8,6 +8,7 @@
  */
 import { BoxGeometry, CylinderGeometry, Group, Mesh, MeshStandardMaterial } from '@iwsdk/core';
 import type { SceneObject } from '../shared/index.js';
+import { mergeByMaterial } from './merge.js';
 
 const M = {
   fabric: new MeshStandardMaterial({ color: 0x5b6b7d, roughness: 0.95 }),
@@ -113,6 +114,7 @@ export function buildFurniture(obj: SceneObject): Group {
   g.userData = { kind: 'object', objectId: obj.id, roomId: obj.roomId, method: obj.reconstructionMethod };
   const [w, h, d] = obj.sizeM;
   (BUILDERS[obj.kind] ?? ((gg, ww, hh, dd) => box(gg, M.generic, ww, hh, dd, 0, 0, 0)))(g, w, h, d);
+  mergeByMaterial(g);
   g.position.set(obj.positionXYZ[0], obj.positionXYZ[1] - h / 2, obj.positionXYZ[2]);
   g.rotation.y = obj.rotationY;
   return g;

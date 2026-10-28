@@ -10,6 +10,8 @@ import {
   placeObjects,
   verifyGeometry,
   wallPieces,
+  computeViewpoints,
+  pointInPolygon,
 } from '../src/shared/index.js';
 
 const fx = (f: string) => JSON.parse(readFileSync(new URL(`../fixtures/demo-house/${f}`, import.meta.url), 'utf8'));
@@ -102,5 +104,28 @@ describe('placement conventions', () => {
       expect(objects.find((o) => o.id === 'west0')!.positionXYZ[2]).toBeCloseTo(0.5, 2); // north end of west wall
       expect(objects.find((o) => o.id === 'north1')!.positionXYZ[0]).toBeCloseTo(3.5, 2); // east end of north wall
     }
+  });
+});
+
+describe('viewpoints', () => {
+  const structure = buildStructure(interp, { propertyId: 'p' });
+  const vps = computeViewpoints(structure);
+  it('gives every room at least one look-around point inside it', () => {
+    for (const r of structure.rooms) {
+      const mine = vps.filter((v) => v.roomId === r.id && v.kind === 'room');
+      expect(mine.length, r.label).toBeGreaterThan(0);
+      for (const v of mine) expect(pointInPolygon(v.position, r.polygonXZMeters)).toBe(true);
+    }
+  });
+  it('adds a point in each internal doorway and links the floors by stairs', () => {
+    const doors = structure.openings.filter((o) => (o.type === 'door' || o.type === 'archway') && o.roomIds.length === 2);
+    expect(vps.filter((v) => v.kind === 'door')).toHaveLength(doors.length);
+    const stairs = vps.filter((v) => v.kind === 'stairs');
+    expect(stairs).toHaveLength(2);
+    expect(stairs[0].target?.levelId).toBe(stairs[1].levelId);
+  });
+  it('keeps points off the stair flight', () => {
+    const v = structure.levels[1].stairVoids[0];
+    for (const p of vps.filter((x) => x.levelId === 'L0')) expect(pointInPolygon(p.position, v)).toBe(false);
   });
 });

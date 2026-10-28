@@ -309,6 +309,38 @@ export const SceneObject = z.object({
 export type SceneObject = z.infer<typeof SceneObject>;
 
 // ---------------------------------------------------------------------------
+// Surface appearance (AI-inferred from listing photos)
+// ---------------------------------------------------------------------------
+
+export const SurfaceMaterial = z.enum(['paint', 'wallpaper', 'tile', 'wood', 'laminate', 'carpet', 'stone', 'concrete', 'other']);
+export type SurfaceMaterial = z.infer<typeof SurfaceMaterial>;
+
+/** One surface's look. `texture` points at a patch of a real listing photo. */
+export const SurfaceSpec = z.object({
+  colorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  material: SurfaceMaterial,
+  texture: z
+    .object({
+      mediaId: z.string(),
+      /** Normalised [x0,y0,x1,y1] of a flat, unobstructed patch in the photo. */
+      box: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+      /** Real-world width the patch covers, meters (sets tiling scale). */
+      patchSizeM: z.number().positive().max(5),
+    })
+    .nullable(),
+  confidence: Confidence,
+});
+export type SurfaceSpec = z.infer<typeof SurfaceSpec>;
+
+export const RoomSurfaces = z.object({
+  roomId: z.string(),
+  wall: SurfaceSpec,
+  floor: SurfaceSpec,
+  provenance: Provenance,
+});
+export type RoomSurfaces = z.infer<typeof RoomSurfaces>;
+
+// ---------------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------------
 
@@ -385,6 +417,7 @@ export const EvidenceFlags = z.object({
   photoEvidence: z.enum(['none', 'partial', 'all-rooms']),
   segmentationBy: ProvenanceMethod.nullable(),
   sam3d: z.enum(['disabled', 'failed', 'used']),
+  surfacesFromPhotos: z.number().int().default(0),
   ceilingHeightEstimated: z.boolean(),
   scaleEstimated: z.boolean(),
   notes: z.array(z.string()),
@@ -406,6 +439,8 @@ export const SceneManifest = z.object({
   objects: z.array(SceneObject),
   mediaMatches: z.array(MediaRoomMatch),
   detections: z.array(Detection),
+  /** Rooms whose wall/floor look was read from listing photos. Others use defaults. */
+  roomSurfaces: z.array(RoomSurfaces).default([]),
   verification: VerificationReport,
   evidenceFlags: EvidenceFlags,
   previewCamera: z.object({ position: Vec3, target: Vec3 }),

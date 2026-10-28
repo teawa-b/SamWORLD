@@ -17,8 +17,11 @@ import {
   Float32BufferAttribute,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Path,
+  RingGeometry,
+  CircleGeometry,
   Shape,
   Vector2,
   Vector3,
@@ -26,15 +29,20 @@ import {
 import {
   SLAB_THICKNESS_M,
   WALL_THICKNESS_M,
+  computeViewpoints,
   pointInPolygon,
   wallPieces,
   type Room,
+  type RoomSurfaces,
+  type Viewpoint,
   type SceneManifest,
   type Vec2,
   type Wall,
 } from '../shared/index.js';
 import { buildFurniture } from './furniture.js';
 import { makeLabel } from './labels.js';
+import { ceilingMaterial, exteriorMaterial, surfaceMaterial } from './materials.js';
+import { mergeAll, subsetByGroups } from './merge.js';
 
 export interface LevelBuild {
   levelId: string;
@@ -44,6 +52,7 @@ export interface LevelBuild {
   rooms: { room: Room; floor: Mesh }[];
   furniture: Group;
   labels: Group;
+  hotspots: { viewpoint: Viewpoint; marker: Group }[];
 }
 
 export interface HouseBuild {
@@ -56,28 +65,13 @@ export interface HouseBuild {
 }
 
 const mats = {
-  wallExt: new MeshStandardMaterial({ color: 0xe9e4da, roughness: 0.9 }),
-  wallInt: new MeshStandardMaterial({ color: 0xf6f3ee, roughness: 0.95 }),
   slabEdge: new MeshStandardMaterial({ color: 0xb9b2a6, roughness: 1 }),
   glass: new MeshStandardMaterial({ color: 0x9fc6e0, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.35 }),
   roof: new MeshStandardMaterial({ color: 0x7a4b3a, roughness: 0.8, side: DoubleSide }),
   stair: new MeshStandardMaterial({ color: 0xa9845c, roughness: 0.7 }),
-  ceiling: new MeshStandardMaterial({ color: 0xfbfaf7, roughness: 1 }),
-};
-
-/** Floor finish per room type; evidence mode recolours these. */
-const FLOOR_COLORS: Record<string, number> = {
-  living: 0xc8a27a,
-  bedroom: 0xcaa883,
-  dining: 0xc8a27a,
-  study: 0xc8a27a,
-  kitchen: 0xd9d4cb,
-  bathroom: 0xdfe5e8,
-  wc: 0xdfe5e8,
-  utility: 0xd9d4cb,
-  hall: 0xb79168,
-  landing: 0xbfa080,
-  other: 0xcfc6b8,
+  hotspot: new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false }),
+  hotspotFill: new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.28, depthWrite: false }),
+  hotspotStairs: new MeshBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.95, depthWrite: false }),
 };
 
 export const EVIDENCE_COLORS = {
@@ -92,8 +86,22 @@ export function evidenceColor(room: Room): Color {
   return EVIDENCE_COLORS.estimated;
 }
 
-export function buildHouse(scene: SceneManifest): HouseBuild {
+export interface BuildOptions {
+  /** Resolves a listing photo id to a URL the browser can load (for textures). */
+  mediaUrl: (mediaId: string) => string | null;
+}
+
+export function buildHouse(scene: SceneManifest, opts: BuildOptions): HouseBuild {
   const s = scene.structure;
+  const surfaces = new Map<string, RoomSurfaces>((scene.roomSurfaces ?? []).map((r) => [r.roomId, r]));
+  const floorMats = new Map<string, MeshStandardMaterial>();
+  const wallMats = new Map<string, MeshStandardMaterial>();
+  const src = (roomId: string) => ({ surfaces: surfaces.get(roomId), mediaUrl: opts.mediaUrl });
+  for (const r of s.rooms) {
+    floorMats.set(r.id, surfaceMaterial('floor', r.type, src(r.id)));
+    wallMats.set(r.id, surfaceMaterial('wall', r.type, src(r.id)));
+  }
+  const viewpoints = computeViewpoints(s);
   const b = s.footprintBounds;
   const centre: Vec2 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2];
   const root = new Group();
@@ -109,7 +117,7 @@ export function buildHouse(scene: SceneManifest): HouseBuild {
     group.name = `Floor_${level.index}`;
     group.userData = { kind: 'level', levelId: level.id };
     shell.add(group);
-    const lb: LevelBuild = { levelId: level.id, index: level.index, group, walls: [], rooms: [], furniture: new Group(), labels: new Group() };
+    const lb: LevelBuild = { levelId: level.id, index: level.index, group, walls: [], rooms: [], furniture: new Group(), labels: new Group(), hotspots: [] };
     lb.furniture.name = `Furnishings_${level.index}`;
     lb.labels.name = `Labels_${level.index}`;
     group.add(lb.furniture, lb.labels);
@@ -125,9 +133,8 @@ export function buildHouse(scene: SceneManifest): HouseBuild {
       const geo = new ExtrudeGeometry(shape, { depth: SLAB_THICKNESS_M, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2); // shape XY → XZ, extrude along +Y
       geo.translate(0, elev - SLAB_THICKNESS_M, 0);
-      const mat = new MeshStandardMaterial({ color: FLOOR_COLORS[room.type] ?? FLOOR_COLORS.other, roughness: 0.8 });
-      mat.userData.baseColor = mat.color.clone();
-      const floor = new Mesh(geo, [mat, mats.slabEdge]);
+      // Extrude cap UVs are the shape's (x, -z) in meters, so world-scaled textures tile correctly.
+      const floor = new Mesh(geo, [floorMats.get(room.id)!, mats.slabEdge]);
       floor.name = `Room_${room.id}`;
       floor.userData = { kind: 'room', roomId: room.id, levelId: level.id };
       group.add(floor);
@@ -141,7 +148,7 @@ export function buildHouse(scene: SceneManifest): HouseBuild {
         const cgeo = new ShapeGeometry(new Shape(room.polygonXZMeters.map(([x, z]) => new Vector2(x, z))));
         cgeo.rotateX(Math.PI / 2);
         cgeo.translate(0, elev + level.heightMeters - 0.002, 0);
-        const ceiling = new Mesh(cgeo, mats.ceiling);
+        const ceiling = new Mesh(cgeo, ceilingMaterial());
         ceiling.userData = { kind: 'ceiling', roomId: room.id };
         group.add(ceiling);
       }
@@ -159,11 +166,29 @@ export function buildHouse(scene: SceneManifest): HouseBuild {
       const angle = Math.atan2(-(wall.b[1] - wall.a[1]), wall.b[0] - wall.a[0]);
       wg.position.set(wall.a[0], elev, wall.a[1]);
       wg.rotation.y = angle;
-      const mat = wall.exterior ? mats.wallExt : mats.wallInt;
+      // Each face gets the finish of the room it faces; outside faces get the exterior.
+      const len = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]);
+      const n: Vec2 = [-(wall.b[1] - wall.a[1]) / len, (wall.b[0] - wall.a[0]) / len]; // local +Z in plan
+      const wallMid: Vec2 = [(wall.a[0] + wall.b[0]) / 2, (wall.a[1] + wall.b[1]) / 2];
+      const roomAt = (sgn: number) =>
+        s.rooms.find((r) => r.levelId === level.id && wall.roomIds.includes(r.id) && pointInPolygon([wallMid[0] + n[0] * 0.2 * sgn, wallMid[1] + n[1] * 0.2 * sgn], r.polygonXZMeters));
+      const plusZ = roomAt(1);
+      const minusZ = roomAt(-1);
+      const faceMat = (r: Room | undefined) => (r ? wallMats.get(r.id)! : exteriorMaterial());
+      // One mesh per side: box faces 0-3 (edges) and 4 (+Z) take side A, face 5 (-Z) side B.
+      const sideA: BufferGeometry[] = [];
+      const sideB: BufferGeometry[] = [];
       for (const p of wallPieces(wall, s.openings, level.heightMeters)) {
         const geo = new BoxGeometry(p.s1 - p.s0, p.y1 - p.y0, WALL_THICKNESS_M);
-        const m = new Mesh(geo, mat);
-        m.position.set((p.s0 + p.s1) / 2, (p.y0 + p.y1) / 2, 0);
+        worldUVs(geo, (p.s0 + p.s1) / 2, (p.y0 + p.y1) / 2);
+        geo.translate((p.s0 + p.s1) / 2, (p.y0 + p.y1) / 2, 0);
+        sideA.push(subsetByGroups(geo, [0, 1, 2, 3, 4]));
+        sideB.push(subsetByGroups(geo, [5]));
+      }
+      for (const [geos, mat] of [[sideA, faceMat(plusZ ?? minusZ)], [sideB, faceMat(minusZ)]] as const) {
+        const merged = mergeAll(geos as BufferGeometry[]);
+        if (!merged) continue;
+        const m = new Mesh(merged, mat);
         m.userData = { kind: 'wall', wallId: wall.id };
         wg.add(m);
       }
@@ -179,6 +204,30 @@ export function buildHouse(scene: SceneManifest): HouseBuild {
       const nrm = new Vector3(-(wall.b[1] - wall.a[1]), 0, wall.b[0] - wall.a[0]).normalize();
       if (nrm.dot(mid) < 0) nrm.negate();
       lb.walls.push({ wall, group: wg, outward: nrm });
+    }
+
+    // Look-around points (tap to move). Hidden except while walking.
+    for (const vp of viewpoints.filter((v) => v.levelId === level.id)) {
+      const marker = new Group();
+      const ring = new Mesh(new RingGeometry(0.2, 0.27, 40), vp.kind === 'stairs' ? mats.hotspotStairs : mats.hotspot);
+      const fill = new Mesh(new CircleGeometry(0.2, 40), vp.kind === 'stairs' ? mats.hotspotStairs : mats.hotspotFill);
+      ring.rotation.x = fill.rotation.x = -Math.PI / 2;
+      marker.add(fill, ring);
+      if (vp.kind === 'stairs') {
+        const lbl = makeLabel(vp.target && s.levels.find((l) => l.id === vp.target!.levelId)!.index > level.index ? 'Upstairs' : 'Downstairs', 'plan');
+        lbl.position.y = 0.5;
+        lbl.scale.set(0.8, 0.25, 1);
+        marker.add(lbl);
+      }
+      // A larger invisible disc makes the marker easy to tap.
+      const hit = new Mesh(new CircleGeometry(0.45, 16), new MeshBasicMaterial({ visible: false }));
+      hit.rotation.x = -Math.PI / 2;
+      marker.add(hit);
+      marker.position.set(vp.position[0], elev + 0.015, vp.position[1]);
+      marker.visible = false;
+      marker.userData = { kind: 'viewpoint', viewpointId: vp.id };
+      group.add(marker);
+      lb.hotspots.push({ viewpoint: vp, marker });
     }
 
     // Stairs (placeholder geometry: straight flight along the longer axis).
@@ -209,6 +258,25 @@ export function buildHouse(scene: SceneManifest): HouseBuild {
   return { root, levels, roof, centre, size, topElevation };
 }
 
+/**
+ * Replace BoxGeometry's 0..1 UVs with meter-based ones so textures keep their
+ * real-world scale (and line up) across wall pieces of any size.
+ */
+function worldUVs(geo: BoxGeometry, cx: number, cy: number) {
+  const pos = geo.attributes.position;
+  const nrm = geo.attributes.normal;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + cx;
+    const y = pos.getY(i) + cy;
+    const z = pos.getZ(i);
+    if (Math.abs(nrm.getZ(i)) > 0.5) uv.setXY(i, x, y);
+    else if (Math.abs(nrm.getX(i)) > 0.5) uv.setXY(i, z, y);
+    else uv.setXY(i, x, z);
+  }
+  uv.needsUpdate = true;
+}
+
 function centroid(poly: Vec2[]): Vec2 {
   const n = poly.length;
   return [poly.reduce((a, p) => a + p[0], 0) / n, poly.reduce((a, p) => a + p[1], 0) / n];
@@ -226,15 +294,16 @@ function buildStairs(poly: Vec2[], fromY: number, toY: number): Group {
   const rise = toY - fromY;
   const steps = Math.max(8, Math.round(rise / 0.19));
   const tread = run / steps;
+  const geos: BufferGeometry[] = [];
   for (let i = 0; i < steps; i++) {
     const h = (rise * (i + 1)) / steps;
     const geo = alongZ ? new BoxGeometry(x1 - x0, h, tread) : new BoxGeometry(tread, h, z1 - z0);
-    const m = new Mesh(geo, mats.stair);
     // Rises from the high-coordinate end toward the low end.
-    if (alongZ) m.position.set((x0 + x1) / 2, fromY + h / 2, z1 - tread * (i + 0.5));
-    else m.position.set(x1 - tread * (i + 0.5), fromY + h / 2, (z0 + z1) / 2);
-    g.add(m);
+    if (alongZ) geo.translate((x0 + x1) / 2, fromY + h / 2, z1 - tread * (i + 0.5));
+    else geo.translate(x1 - tread * (i + 0.5), fromY + h / 2, (z0 + z1) / 2);
+    geos.push(geo);
   }
+  g.add(new Mesh(mergeAll(geos)!, mats.stair));
   return g;
 }
 

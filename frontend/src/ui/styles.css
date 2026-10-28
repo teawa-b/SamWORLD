@@ -271,16 +271,6 @@ figure.det img { width: 100%; border-radius: 8px; }
 figure.det .mask { position: absolute; inset: 0; }
 figure.det .box { position: absolute; border: 2px solid #ff5a2c; border-radius: 2px; pointer-events: none; }
 
-/* joystick (touch walk mode) */
-#joystick {
-  position: fixed; z-index: 15; left: 22px; bottom: calc(var(--sheet-h, var(--sheet-peek)) + 22px);
-  width: 120px; height: 120px; border-radius: 50%; background: var(--glass); border: 1px solid var(--line);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); touch-action: none; box-shadow: var(--shadow);
-}
-#joystick .knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: var(--accent); box-shadow: var(--shadow); }
-#joystick .label { position: absolute; left: 0; right: 0; bottom: -22px; text-align: center; font-size: 11px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
-@media (min-width: 900px) { #joystick { left: calc(var(--panel-w) + 22px); bottom: 22px; } }
-
 .toast { position: fixed; z-index: 50; left: 50%; top: max(64px, calc(env(safe-area-inset-top) + 56px)); transform: translateX(-50%); background: var(--text); color: var(--surface); padding: 12px 16px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100vw - 32px); }
 .error-text { color: var(--bad); }
 [hidden] { display: none !important; }

@@ -25,10 +25,10 @@ import {
   type World,
 } from '@iwsdk/core';
 import type { SceneManifest } from '../shared/index.js';
-import { LevelHandle, Plinth, PropertyRoot, RoomFloor, WallPanel } from '../components.js';
+import { Hotspot, LevelHandle, Plinth, PropertyRoot, RoomFloor, WallPanel } from '../components.js';
 import { buildHouse, buildRoom, evidenceColor, type HouseBuild } from '../scene/build.js';
 import { app, EXPLODE_LIFT_M, toggleWall } from '../state.js';
-import { absoluteApiUrl } from '../api.js';
+import { absoluteApiUrl, mediaUrl } from '../api.js';
 
 export const HOUSE_SCALE = 0.06;
 const PLINTH_HOME = new Vector3(0, 0.98, -0.8);
@@ -44,6 +44,8 @@ export interface Mounted {
   viewingRoom: Entity;
   lights: PointLight[];
   wallHome: Map<string, Vector3>;
+  /** Every entity created for this house, children after parents. */
+  entities: Entity[];
 }
 
 const g = (world: World) => world.globals as { mounted?: Mounted };
@@ -51,9 +53,16 @@ export const mounted = (world: World) => g(world).mounted;
 
 export function mountHouse(world: World, scene: SceneManifest) {
   unmountHouse(world);
-  const build = buildHouse(scene);
+  const entities: Entity[] = [];
+  const track = (e: Entity) => (entities.push(e), e);
+  const build = buildHouse(scene, {
+    mediaUrl: (id) => {
+      const m = scene.media.find((x) => x.id === id);
+      return m ? mediaUrl(m) : null;
+    },
+  });
 
-  const viewingRoom = world.createTransformEntity(buildRoom());
+  const viewingRoom = track(world.createTransformEntity(buildRoom()));
 
   const plinthMesh = new Mesh(new CylinderGeometry(0.36, 0.36, 0.025, 48), new MeshStandardMaterial({ color: 0xd9d4cc, roughness: 0.6 }));
   plinthMesh.position.y = 0.0125;
@@ -61,29 +70,38 @@ export function mountHouse(world: World, scene: SceneManifest) {
   plinthGroup.name = 'Plinth';
   plinthGroup.add(plinthMesh);
   plinthGroup.position.copy(PLINTH_HOME);
-  const plinth = world.createTransformEntity(plinthGroup);
+  const plinth = track(world.createTransformEntity(plinthGroup));
   plinth.addComponent(Plinth);
   plinth.addComponent(TwoHandsGrabbable, { rotate: true, translate: true, scale: true, scaleMin: [0.4, 0.4, 0.4], scaleMax: [4, 4, 4] });
 
+  // Start on the plinth so the first frame never shows the house full size.
+  build.root.position.copy(PLINTH_HOME).y += 0.026;
+  build.root.scale.setScalar(HOUSE_SCALE);
+
   // Entity hierarchy mirrors the spec: PropertyRoot > BuildingShell > Floor_n > walls/rooms.
-  const rootEntity = world.createTransformEntity(build.root);
+  const rootEntity = track(world.createTransformEntity(build.root));
   rootEntity.addComponent(PropertyRoot);
   const shell = build.root.children[0];
-  const shellEntity = world.createTransformEntity(shell, rootEntity);
+  const shellEntity = track(world.createTransformEntity(shell, rootEntity));
   for (const lb of build.levels) {
-    const levelEntity = world.createTransformEntity(lb.group, shellEntity);
+    const levelEntity = track(world.createTransformEntity(lb.group, shellEntity));
     for (const r of lb.rooms) {
-      const e = world.createTransformEntity(r.floor, levelEntity);
+      const e = track(world.createTransformEntity(r.floor, levelEntity));
       e.addComponent(RoomFloor, { roomId: r.room.id });
       e.addComponent(RayInteractable);
     }
     for (const w of lb.walls) {
-      const e = world.createTransformEntity(w.group, levelEntity);
+      const e = track(world.createTransformEntity(w.group, levelEntity));
       e.addComponent(WallPanel, { wallId: w.wall.id });
       e.addComponent(RayInteractable);
     }
+    for (const h of lb.hotspots) {
+      const e = track(world.createTransformEntity(h.marker, levelEntity));
+      e.addComponent(Hotspot, { viewpointId: h.viewpoint.id });
+      e.addComponent(RayInteractable);
+    }
   }
-  if (build.roof) world.createTransformEntity(build.roof, shellEntity);
+  if (build.roof) track(world.createTransformEntity(build.roof, shellEntity));
 
   // Lift handles to the side of the house (house-local meters).
   const handles: Entity[] = [];
@@ -95,7 +113,7 @@ export function mountHouse(world: World, scene: SceneManifest) {
     knob.name = `LiftHandle_${lb.index}`;
     const y = level.elevationMeters + 0.6;
     knob.position.set(sideX, y, 0);
-    const e = world.createTransformEntity(knob, rootEntity);
+    const e = track(world.createTransformEntity(knob, rootEntity));
     e.addComponent(LevelHandle, { levelIndex: lb.index, baseY: y });
     e.addComponent(OneHandGrabbable, { rotate: false, translate: true, translateMin: [sideX, y, 0], translateMax: [sideX, y + 8, 0] });
     handles.push(e);
@@ -106,7 +124,7 @@ export function mountHouse(world: World, scene: SceneManifest) {
     knob.name = 'RoofHandle';
     const y = build.topElevation + 0.6;
     knob.position.set(sideX, y, 0);
-    roofHandle = world.createTransformEntity(knob, rootEntity);
+    roofHandle = track(world.createTransformEntity(knob, rootEntity));
     roofHandle.addComponent(LevelHandle, { levelIndex: 999, baseY: y });
     roofHandle.addComponent(OneHandGrabbable, { rotate: false, translate: true, translateMin: [sideX, y, 0], translateMax: [sideX, y + 10, 0] });
   }
@@ -127,7 +145,7 @@ export function mountHouse(world: World, scene: SceneManifest) {
   const wallHome = new Map<string, Vector3>();
   for (const lb of build.levels) for (const w of lb.walls) wallHome.set(w.wall.id, w.group.position.clone());
 
-  g(world).mounted = { build, rootEntity, plinth, handles, roofHandle, viewingRoom, lights, wallHome };
+  g(world).mounted = { build, rootEntity, plinth, handles, roofHandle, viewingRoom, lights, wallHome, entities };
   void swapInReconstructedObjects(scene, build);
   app.levelLift.value = scene.structure.levels.map(() => 0);
 }
@@ -161,7 +179,9 @@ async function swapInReconstructedObjects(scene: SceneManifest, build: HouseBuil
 export function unmountHouse(world: World) {
   const m = mounted(world);
   if (!m) return;
-  for (const e of [...m.handles, ...(m.roofHandle ? [m.roofHandle] : []), m.plinth, m.viewingRoom, m.rootEntity]) e.dispose();
+  // Children first: disposing a parent entity would re-attach its child
+  // entities to the scene root and leave a full-size copy of the house behind.
+  for (const e of [...m.entities].reverse()) e.dispose();
   g(world).mounted = undefined;
 }
 
@@ -303,6 +323,18 @@ export class DollhouseSystem extends createSystem({
         const target = this.tmp.copy(w.outward).multiplyScalar(out).add(home);
         w.group.position.lerp(target, k);
         w.group.visible = walking || !app.wallsHidden.value;
+      }
+    }
+
+    // Look-around markers: only while walking, only on the current floor, and
+    // not the one you are standing on.
+    const walkLevel = app.walkLevelId.peek();
+    const px = this.world.player.position.x + m.build.centre[0];
+    const pz = this.world.player.position.z + m.build.centre[1];
+    for (const lb of m.build.levels) {
+      for (const h of lb.hotspots) {
+        const here = Math.hypot(h.viewpoint.position[0] - px, h.viewpoint.position[1] - pz) < 0.45;
+        h.marker.visible = walking && lb.levelId === walkLevel && !here;
       }
     }
 

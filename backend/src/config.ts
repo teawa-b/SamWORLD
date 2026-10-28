@@ -24,7 +24,7 @@ export const config = {
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:8081,https://localhost:8081').split(',').map((s) => s.trim()),
   backendRoot: root,
   dataDir: resolve(process.env.DATA_DIR ?? `${root}/data`),
-  fixturesDir: resolve(`${root}/fixtures`),
+  fixturesDir: resolve(process.env.FIXTURES_DIR ?? `${root}/fixtures`),
   // `npm run bake` writes static scenes here; defaults to the sibling
   // frontend checkout so a local bake lands in frontend/public/cached.
   bakeOutDir: resolve(process.env.BAKE_OUT_DIR ?? `${root}/../frontend/public/cached`),

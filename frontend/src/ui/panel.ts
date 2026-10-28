@@ -78,7 +78,6 @@ export class Panel {
     // Selecting a room in 3D opens the sheet enough to show it.
     app.selectedRoomId.subscribe((id) => id && this.sheet.current === 'peek' && this.sheet.set('half'));
     app.mode.subscribe((m) => {
-      (document.getElementById('joystick') as HTMLElement).hidden = m !== 'walk' || !matchMedia('(hover: none)').matches;
       if (this.view.name === 'explore') this.sheet.set(m === 'walk' ? 'peek' : 'half');
     });
   }
@@ -253,7 +252,7 @@ export class Panel {
       return `
         <div class="room-card card">
           <div class="grow"><div class="name">Walking · ${esc(level?.name ?? '')}</div>
-          <div class="meta"><span class="touch-only">Drag the view to look around, use the joystick to walk.</span><span class="desktop-only">Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move.</span></div></div>
+          <div class="meta"><span class="touch-only">Tap a white circle to move there. Drag to look around.</span><span class="desktop-only">Click a white circle to move there, drag to look, or use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>.</span></div></div>
         </div>
         <div class="walk-actions">
           ${tool('level-up', 'up', 'Upstairs', false, '', lvlIdx >= s.structure.levels.length - 1 ? 'disabled' : '')}
@@ -364,6 +363,7 @@ export class Panel {
         <li><span>Floor plan read by</span><span>${esc(METHOD_LABELS[f.floorplanInterpretedBy] ?? f.floorplanInterpretedBy)}</span></li>
         <li><span>Photo evidence</span><span>${esc({ none: 'None', partial: 'Some rooms', 'all-rooms': 'All rooms' }[f.photoEvidence])}</span></li>
         <li><span>Furniture detection</span><span>${f.segmentationBy ? `${esc(METHOD_LABELS[f.segmentationBy])} · ${s.detections.length}` : 'Not run'}</span></li>
+        <li><span>Wall & floor finishes</span><span>${f.surfacesFromPhotos ? `${f.surfacesFromPhotos} room(s) from photos, others default` : 'Defaults by room type'}</span></li>
         <li><span>Furniture models</span><span>${f.sam3d === 'used' ? 'Some 3D-reconstructed' : 'Simple stand-in shapes'}</span></li>
         <li><span>Ceiling height</span><span>${f.ceilingHeightEstimated ? 'Estimated (2.4 m)' : 'From plan'}</span></li>
         <li><span>Scale</span><span>${f.scaleEstimated ? 'Estimated' : 'From printed sizes'}</span></li>

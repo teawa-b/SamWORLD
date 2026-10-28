@@ -5,7 +5,6 @@ import { DollhouseSystem, mountHouse, unmountHouse } from './systems/dollhouse.j
 import { MenuSystem } from './systems/menu.js';
 import { WalkthroughSystem } from './systems/walkthrough.js';
 import { icon } from './ui/icons.js';
-import { bindJoystick } from './ui/joystick.js';
 import { Panel } from './ui/panel.js';
 import { Sheet } from './ui/sheet.js';
 import './ui/styles.css';
@@ -52,8 +51,6 @@ sheet.onResize(() => requestAnimationFrame(frame));
 panelEl.addEventListener('transitionend', frame);
 window.addEventListener('resize', () => requestAnimationFrame(frame));
 app.inXR.subscribe(frame);
-
-bindJoystick(document.getElementById('joystick')!);
 
 const panel = new Panel(world, panelEl, sheet);
 await panel.start();

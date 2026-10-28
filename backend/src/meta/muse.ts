@@ -6,7 +6,9 @@
 import {
   FloorplanInterpretation,
   PlacementCandidate,
+  RoomSurfaces,
   RoomType,
+  SurfaceMaterial,
   type CheckResult,
   type Detection,
   type MediaRoomMatch,
@@ -23,6 +25,7 @@ export const PROMPT_VERSIONS = {
   photoMatch: 'photo-match-v1',
   placement: 'placement-v1',
   planReview: 'plan-review-v1',
+  surfaces: 'surfaces-v1',
 };
 
 const provenance = (model: string, promptVersion: string): Provenance => ({
@@ -292,6 +295,65 @@ export async function suggestPlacements(opts: {
       provenance: prov,
     }),
   );
+}
+
+// ---------------------------------------------------------------------------
+// 3b. Wall and floor appearance for one room (for texturing)
+// ---------------------------------------------------------------------------
+
+const surfaceSchema = obj({
+  colorHex: str,
+  material: { type: 'string', enum: SurfaceMaterial.options },
+  photoIndex: { type: ['integer', 'null'] },
+  box: { type: ['array', 'null'], items: num, minItems: 4, maxItems: 4 },
+  patchSizeM: num,
+  confidence: num,
+});
+const surfacesSchema = obj({ wall: surfaceSchema, floor: surfaceSchema });
+
+interface SurfaceReply {
+  colorHex: string;
+  material: z.infer<typeof SurfaceMaterial>;
+  photoIndex: number | null;
+  box: [number, number, number, number] | null;
+  patchSizeM: number;
+  confidence: number;
+}
+
+/**
+ * Ask Muse for the room's dominant wall and floor finish, and for a flat,
+ * unobstructed, roughly front-on patch of each in one of the photos. The
+ * browser crops that patch from the real photo and tiles it. Boxes are
+ * validated here; a bad box falls back to colour-only.
+ */
+export async function readRoomSurfaces(opts: {
+  budget: AiBudget;
+  roomId: string;
+  roomLabel: string;
+  photos: { mediaId: string; dataUrl: string }[];
+}): Promise<RoomSurfaces> {
+  const { data, model } = await museJson<{ wall: SurfaceReply; floor: SurfaceReply }>({
+    budget: opts.budget,
+    system:
+      'You describe interior finishes from listing photos so a 3D model can be textured to match. For the walls and for the floor, give the dominant colour as #rrggbb, the material, and a rectangle (normalised 0..1 [x0,y0,x1,y1]) in one photo covering a flat, evenly lit, unobstructed patch of that surface: no furniture, windows, shadows or edges, as front-on as possible (for floors prefer the area nearest the camera). patchSizeM is your estimate of how many metres wide that patch is in reality (wood boards and tiles help). If no clean patch exists, return null for photoIndex and box.',
+    text: `Room: "${opts.roomLabel}". ${opts.photos.length} photo(s) follow, numbered from 0.`,
+    images: opts.photos.map((p) => p.dataUrl),
+    schemaName: 'room_surfaces',
+    schema: surfacesSchema,
+  });
+  const prov = provenance(model, PROMPT_VERSIONS.surfaces);
+  const toSpec = (r: SurfaceReply) => {
+    const photo = r.photoIndex != null ? opts.photos[r.photoIndex] : undefined;
+    const b = r.box;
+    const boxOk = !!b && b.every((v) => v >= 0 && v <= 1) && b[2] - b[0] >= 0.04 && b[3] - b[1] >= 0.04;
+    return {
+      colorHex: /^#[0-9a-fA-F]{6}$/.test(r.colorHex) ? r.colorHex : '#d8d4cc',
+      material: r.material,
+      texture: photo && boxOk ? { mediaId: photo.mediaId, box: b!, patchSizeM: Math.min(5, Math.max(0.2, r.patchSizeM || 1)) } : null,
+      confidence: clamp01(r.confidence),
+    };
+  };
+  return RoomSurfaces.parse({ roomId: opts.roomId, wall: toSpec(data.wall), floor: toSpec(data.floor), provenance: prov });
 }
 
 // ---------------------------------------------------------------------------
