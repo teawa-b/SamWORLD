@@ -223,6 +223,14 @@ export async function registerRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get('/api/sam3d/:file', async (req, reply) => {
+    const file = (req.params as { file: string }).file;
+    if (!/^[a-f0-9]{24}\.(glb|ply)$/.test(file)) throw new HttpError(400, 'BAD_REQUEST', 'Invalid file');
+    const abs = resolveStorageKey(`sam3d/${file}`);
+    if (!abs) throw new HttpError(404, 'NOT_FOUND', 'Not found');
+    return sendFile(reply, abs, file.endsWith('.glb') ? 'model/gltf-binary' : 'application/octet-stream');
+  });
+
   app.get('/api/visualisations/:file', async (req, reply) => {
     const file = (req.params as { file: string }).file;
     if (!/^[A-Za-z0-9_-]+\.png$/.test(file)) throw new HttpError(400, 'BAD_REQUEST', 'Invalid file');

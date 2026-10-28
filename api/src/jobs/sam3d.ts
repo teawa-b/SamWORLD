@@ -9,7 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Detection, EvidenceFlags, SceneObject, StepLog } from '@propertyxr/shared';
 import { config } from '../config.js';
@@ -22,6 +22,8 @@ interface WorkerReply {
   objectId: string;
   format?: 'glb' | 'ply-splat' | 'ply-mesh';
   assetUrl?: string;
+  /** Inline asset (the worker in worker-3d/ returns this); stored by us. */
+  assetBase64?: string;
   modelVersion?: string;
   durationSeconds?: number;
   diagnostics?: string[];
@@ -82,6 +84,12 @@ export async function requestSam3d(opts: {
         if (!res.ok) reply = { status: 'error', objectId: o.id, diagnostics: [`HTTP ${res.status}`, ...(reply.diagnostics ?? [])] };
       } catch (e) {
         reply = { status: 'error', objectId: o.id, diagnostics: [(e as Error).message] };
+      }
+      if (reply.status === 'ok' && reply.assetBase64) {
+        const file = `${hash.slice(0, 24)}.${reply.format === 'glb' ? 'glb' : 'ply'}`;
+        await mkdir(join(config.dataDir, 'sam3d'), { recursive: true });
+        await writeFile(join(config.dataDir, 'sam3d', file), Buffer.from(reply.assetBase64, 'base64'));
+        reply = { ...reply, assetBase64: undefined, assetUrl: `/api/sam3d/${file}` };
       }
       // Cache failures too, so a broken input is not retried at GPU cost.
       cache[hash] = reply;

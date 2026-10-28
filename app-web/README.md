@@ -1,26 +1,20 @@
-# IWSDK App
+# app-web
 
-This project uses `iwsdk.config.json` for declarative scene, asset, component,
-XR, and emulator configuration. Application systems remain explicit in
-`src/index.ts`.
+IWSDK + Vite frontend. `iwsdk.config.json` holds the declarative world
+settings: VR session with hand tracking, grabbing and spatial UI. The built-in
+locomotion is off because walking uses plan-wall collision in
+`src/systems/walkthrough.ts`. Systems are registered in `src/index.ts`.
 
 ```sh
-npm install
-npm run dev
+npm run dev:runtime     # plain Vite on https://localhost:8081 (proxies /api to :8787)
+npm run dev             # IWSDK managed dev session (browser + emulator tooling)
+npm run build
 ```
 
-Use the Runtime and Editor controls in the managed browser to switch between
-the running experience and its authored scene.
+- `src/scene/`: manifest → Three.js (structure, proxies, labels)
+- `src/systems/`: dollhouse interactions, walkthrough/camera, XR menu
+- `src/ui/`: HTML side panel
+- `public/ui/property-menu.uikitml`: in-headset menu
+- `public/cached/`: baked scenes for API-less hosting (`npm run fixture:bake`)
 
-## Starter content
-
-The robot and welcome panel are small examples of authored scene content plus
-runtime systems. The robot turns toward the player's head and plays a sound
-when pressed. To remove the robot, delete its scene node, its `RobotSystem`
-registration from `src/index.ts` or `src/index.js`, and its `Robot` registration
-from `src/components.ts` or `src/components.js`; you can then delete the unused
-robot component and system files. To remove the welcome panel, delete its scene
-node and its `PanelSystem` registration from the application entry point.
-
-- Minimal scene walkthrough: https://iwsdk.dev/guides/01b-minimal-scene.html
-- XR-enabled projects — IWER emulator controls: https://iwsdk.dev/guides/02-testing-experience.html#iwer-controls
+IWER emulator controls: https://iwsdk.dev/guides/02-testing-experience.html#iwer-controls

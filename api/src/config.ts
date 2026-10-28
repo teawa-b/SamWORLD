@@ -7,6 +7,13 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 
+// Load api/.env if present. Existing environment variables take precedence.
+try {
+  process.loadEnvFile(resolve(root, 'api/.env'));
+} catch {
+  /* no .env file */
+}
+
 const bool = (v: string | undefined, d: boolean) => (v == null || v === '' ? d : ['1', 'true', 'yes', 'on'].includes(v.toLowerCase()));
 const int = (v: string | undefined, d: number) => (v ? Number.parseInt(v, 10) : d);
 

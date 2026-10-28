@@ -4,6 +4,8 @@
  * out non-destructively, and every change animates back on reset.
  */
 import {
+  AssetManager,
+  Box3,
   CylinderGeometry,
   Group,
   IBLGradient,
@@ -26,6 +28,7 @@ import type { SceneManifest } from '@propertyxr/shared';
 import { LevelHandle, Plinth, PropertyRoot, RoomFloor, WallPanel } from '../components.js';
 import { buildHouse, buildRoom, evidenceColor, type HouseBuild } from '../scene/build.js';
 import { app, EXPLODE_LIFT_M, toggleWall } from '../state.js';
+import { absoluteApiUrl } from '../api.js';
 
 export const HOUSE_SCALE = 0.06;
 const PLINTH_HOME = new Vector3(0, 0.98, -0.8);
@@ -125,7 +128,34 @@ export function mountHouse(world: World, scene: SceneManifest) {
   for (const lb of build.levels) for (const w of lb.walls) wallHome.set(w.wall.id, w.group.position.clone());
 
   g(world).mounted = { build, rootEntity, plinth, handles, roofHandle, viewingRoom, lights, wallHome };
+  void swapInReconstructedObjects(scene, build);
   app.levelLift.value = scene.structure.levels.map(() => 0);
+}
+
+/**
+ * Replace proxies with SAM 3D Objects meshes where the pipeline produced a
+ * GLB. The mesh is scaled to the estimated footprint (SAM 3D output is not
+ * metrically calibrated). On any load failure the proxy simply stays.
+ */
+async function swapInReconstructedObjects(scene: SceneManifest, build: HouseBuild) {
+  for (const obj of scene.objects.filter((o) => o.reconstructionMethod === 'sam3d' && o.modelUrl)) {
+    const proxy = build.levels.flatMap((l) => l.furniture.children).find((c) => c.userData.objectId === obj.id);
+    if (!proxy) continue;
+    try {
+      const gltf = await AssetManager.loadGLTF(absoluteApiUrl(obj.modelUrl!), `sam3d-${obj.id}`);
+      const model = gltf.scene.clone(true);
+      const size = new Box3().setFromObject(model).getSize(new Vector3());
+      const [w, h, d] = obj.sizeM;
+      const s = Math.min(w / (size.x || 1), h / (size.y || 1), d / (size.z || 1));
+      model.scale.setScalar(s);
+      const box = new Box3().setFromObject(model);
+      model.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
+      proxy.clear();
+      proxy.add(model);
+    } catch (e) {
+      console.warn(`SAM 3D model for ${obj.id} failed to load; keeping proxy`, e);
+    }
+  }
 }
 
 export function unmountHouse(world: World) {

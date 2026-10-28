@@ -82,3 +82,25 @@ describe('demo house end to end', () => {
     expect(blocked).toBe(false);
   });
 });
+
+describe('placement conventions', () => {
+  it('measures `along` west→east / north→south regardless of polygon winding', () => {
+    const cw: [number, number][] = [[0, 0], [4, 0], [4, 3], [0, 3]];
+    const ccw = [...cw].reverse();
+    for (const poly of [cw, ccw]) {
+      const structure = buildStructure(
+        {
+          levels: [{ id: 'L', index: 0, name: 'G', planMediaId: 'm', ceilingHeightMeters: 2.4, rooms: [{ id: 'r', label: 'R', type: 'living', polygonPx: poly.map(([x, z]) => [x * 100, z * 100]), measured: { text: '4 x 3', widthM: 4, depthM: 3 }, confidence: 1 }], openings: [], stairs: [] }],
+          statedTotalAreaSqM: null,
+          uncertainties: [],
+          provenance: prov,
+        },
+        { propertyId: 'p' },
+      );
+      const mk = (side: 'west' | 'north', along: number) => ({ id: `${side}${along}`, roomId: 'r', kind: 'box', anchor: { type: 'against-wall' as const, side, along }, sizeM: [1, 1, 0.5] as [number, number, number], sourceDetectionIds: [], sourceMediaIds: [], confidence: 1, rationale: '', provenance: prov });
+      const { objects } = placeObjects(structure, [mk('west', 0), mk('north', 1)], prov);
+      expect(objects.find((o) => o.id === 'west0')!.positionXYZ[2]).toBeCloseTo(0.5, 2); // north end of west wall
+      expect(objects.find((o) => o.id === 'north1')!.positionXYZ[0]).toBeCloseTo(3.5, 2); // east end of north wall
+    }
+  });
+});
