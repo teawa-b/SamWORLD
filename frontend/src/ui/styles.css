@@ -300,3 +300,13 @@ a.plan { color: inherit; text-decoration: none; }
 .near-head h3 { margin: 0; }
 .segmented.small { flex: none; }
 .segmented.small button { height: 28px; font-size: 13px; padding: 0 10px; white-space: nowrap; flex: none; }
+
+.badge-est {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(224, 178, 74, 0.18);
+  color: #b07d12;
+}

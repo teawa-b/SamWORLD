@@ -68,7 +68,7 @@ describe('API vertical slice (offline fixture)', () => {
     const { jobId } = (await app.inject({ method: 'POST', url: `/api/properties/${propertyId}/reconstruct`, payload: {} })).json();
     await drain();
     const job = (await app.inject({ url: `/api/reconstruction-jobs/${jobId}` })).json();
-    expect(job.logs.some((l: { message: string }) => l.message.includes('Reusing cached floor-plan interpretation'))).toBe(true);
+    expect(job.logs.some((l: { message: string }) => l.message.includes('Reusing cached layout'))).toBe(true);
     const scene = (await app.inject({ url: `/api/properties/${propertyId}/scene` })).json();
     expect(scene.structure.rooms.find((r: { id: string }) => r.id === 'L0-living').label).toBe('Lounge');
     expect(scene.sceneVersion).toBe(2);

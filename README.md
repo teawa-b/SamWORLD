@@ -12,9 +12,12 @@ a room at 1:1 scale.
 - **AI (primary):** Meta Model API — **Muse Spark 1.3** (plan reading, photo matching, placement suggestions, verification), optional **Muse Wonder 1.0** escalation, **SAM 3.1** segmentation, **Muse Image 1.0** redesign concepts.
 - **Optional:** SAM 3D Objects on a Modal GPU worker (off by default).
 
-The floor plan is the source of truth for layout. Photos supply appearance and
-evidence. Everything inferred is flagged as estimated in the UI and in the
-saved scene.
+When a listing has a floor plan, it is the source of truth for layout. When
+it doesn't, WalkIn still builds the home: it looks for a plan among the photos,
+and otherwise Muse reads the room list from the photos (or WalkIn derives it
+from the bedrooms, bathrooms and area) and arranges a believable estimated
+layout. Photos supply appearance and evidence. Everything inferred is flagged
+as estimated in the UI and in the saved scene.
 
 ## What works today, and what is simulated
 
@@ -36,7 +39,8 @@ endpoint, but they still need a first real run with your key.
 | SAM 3.1 segmentation (via `@meta-sam/parser`) | **Implemented, not yet run against the real API** |
 | Muse Image redesign | **Implemented, not yet run against the real API** (off unless `REDESIGN_ENABLED=true`) |
 | Demo property | **Project-drawn** two-storey plan (fictional address). The plan reading comes from a **hand-authored reference interpretation** labelled `fixture:hand-authored`. **No photos are included** |
-| Furniture | **Proxy shapes** from hand-authored placement suggestions, labelled as such. With a key and photos, suggestions come from Muse + SAM |
+| Listings without a floor plan | **Working.** Layout source is tried in order: listing plan → plan found among the photos (Muse) → room list read from photos (Muse) → room list from listing facts. The room list is arranged by a deterministic corridor layout (hall, day rooms one side, bedrooms the other, stairs for houses), unit-tested for connectivity and verification. The UI shows "Layout from" and an **estimated layout** badge |
+| Furniture | **Proxy shapes** from hand-authored placement suggestions, labelled as such. With a key and photos, suggestions come from Muse + SAM. Rooms with no suggestions get **typical furniture for the room type**, labelled "typical, not observed" |
 | Globe + live listings | **Built.** The home screen is a MapLibre globe (OpenFreeMap tiles, no key) showing listings near a tapped point, a search or your location: Zoopla in the UK, Zillow and Realtor.com in the US, via RealtyAPI. Endpoints come from the providers' published specs and field names from sampled responses (`docs/realtyapi.md`). Mapping is unit-tested; the full live flow has **not yet been clicked through on the deployed site** |
 | SAM 3D Objects on Modal | **Scaffold only, never deployed.** Off by default; app works fully without it |
 | Supabase / R2 | Not wired up. A JSON-file job table is used (allowed for the prototype); `db/schema.sql` has the Postgres tables |
@@ -108,7 +112,7 @@ Shared contracts are edited in `backend/src/shared/` and copied with
 ## Pipeline
 
 1. **Ingest** the listing, keeping provenance and usage rights. Media marked `unverified` is never sent to a model.
-2. **Parse the plan**: Muse Spark returns room polygons (plan pixels), printed dimensions, doors, windows and stairs as schema-constrained JSON. Without a key, the demo uses its reference interpretation.
+2. **Layout**: with a plan, Muse Spark returns room polygons (plan pixels), printed dimensions, doors, windows and stairs as schema-constrained JSON. Without a plan, Muse checks the photos for one and otherwise lists the rooms it can see; a deterministic packer turns that list (or one derived from the listing facts) into an estimated plan. Without a key, the demo uses its reference interpretation.
 3. **Build the structure**: deterministic. Scale comes from printed dimensions (median across rooms), noisy vertices are aligned, walls are derived from shared room edges, openings become real gaps, and floors stack with an estimated 2.4 m ceiling when none is printed. The shell is published straight away.
 4. **Match photos to rooms** (Muse), then **read each photographed room's wall and floor finish** (colour, material and a clean patch to sample for textures). Manual assignments override the matching.
 5. **Segment** matched photos with SAM 3.1, one noun phrase per request, decoded by `@meta-sam/parser`.

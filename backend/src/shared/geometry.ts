@@ -186,10 +186,10 @@ export function alignAxes(polys: Vec2[][], tol = 0.08): Vec2[][] {
  */
 export function estimateScale(
   interp: FloorplanInterpretation,
-  override?: { metersPerPx: number; method: 'user-reference' },
+  override?: { metersPerPx: number; method: 'user-reference' | 'estimated-layout' },
 ): ScaleEstimate {
   if (override) {
-    return { metersPerPx: override.metersPerPx, method: override.method, samples: 1, spreadPct: 0, estimated: false };
+    return { metersPerPx: override.metersPerPx, method: override.method, samples: 1, spreadPct: 0, estimated: override.method !== 'user-reference' };
   }
   const samples: number[] = [];
   for (const level of interp.levels) {
@@ -383,7 +383,7 @@ export function blockingSegments(structure: Structure, levelId: string): [Vec2, 
 export interface BuildOptions {
   propertyId: string;
   defaultCeilingM?: number;
-  scaleOverride?: { metersPerPx: number; method: 'user-reference' };
+  scaleOverride?: { metersPerPx: number; method: 'user-reference' | 'estimated-layout' };
   roomLabelOverrides?: Record<string, string>;
   uncertainRoomIds?: string[];
 }

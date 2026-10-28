@@ -150,6 +150,8 @@ export const PlanLevel = z.object({
 export type PlanLevel = z.infer<typeof PlanLevel>;
 
 export const FloorplanInterpretation = z.object({
+  /** 'floorplan' = read from a plan; anything else is an estimated layout. */
+  layoutSource: z.enum(['floorplan', 'photo-floorplan', 'photos', 'listing-details']).default('floorplan'),
   levels: z.array(PlanLevel).min(1),
   statedTotalAreaSqM: z.number().positive().nullable(),
   uncertainties: z.array(z.string()),
@@ -163,7 +165,7 @@ export type FloorplanInterpretation = z.infer<typeof FloorplanInterpretation>;
 
 export const ScaleEstimate = z.object({
   metersPerPx: z.number().positive(),
-  method: z.enum(['dimension-labels', 'stated-area', 'user-reference', 'unknown-default']),
+  method: z.enum(['dimension-labels', 'stated-area', 'user-reference', 'unknown-default', 'estimated-layout']),
   samples: z.number().int(),
   spreadPct: z.number(),
   estimated: z.boolean(),
@@ -411,8 +413,13 @@ export const ReconstructionRun = z.object({
 });
 export type ReconstructionRun = z.infer<typeof ReconstructionRun>;
 
+export const LayoutSource = z.enum(['floorplan', 'photo-floorplan', 'photos', 'listing-details']);
+export type LayoutSource = z.infer<typeof LayoutSource>;
+
 export const EvidenceFlags = z.object({
   liveMetaInference: z.boolean(),
+  /** Where the room layout came from; anything but 'floorplan' is an estimate. */
+  layoutSource: LayoutSource.default('floorplan'),
   floorplanInterpretedBy: ProvenanceMethod,
   photoEvidence: z.enum(['none', 'partial', 'all-rooms']),
   segmentationBy: ProvenanceMethod.nullable(),

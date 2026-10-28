@@ -33,6 +33,13 @@ const STEPS: [ReconstructionRun['state'], string][] = [
   ['READY', 'Ready to explore'],
 ];
 
+const LAYOUT_LABELS: Record<string, string> = {
+  floorplan: 'Listing floor plan',
+  'photo-floorplan': 'Floor plan found in the photos',
+  photos: 'Estimated from photos (Muse)',
+  'listing-details': 'Estimated from listing details',
+};
+const estimatedLayout = (s: SceneManifest) => s.evidenceFlags.layoutSource === 'photos' || s.evidenceFlags.layoutSource === 'listing-details';
 const METHOD_LABELS: Record<string, string> = {
   'meta:muse-spark-1.3': 'Meta Muse Spark',
   'meta:muse-wonder-1.0': 'Meta Muse Wonder',
@@ -278,14 +285,14 @@ export class Panel {
       ${
         plans.length
           ? `<div class="scroller plans">${plans.map((m, i) => `<a class="plan" href="${esc(mediaUrl(m))}" target="_blank" rel="noopener"><figure><img src="${esc(mediaUrl(m))}" alt="Floor plan" /><figcaption>${esc(m.levelGuess === 'L0' ? 'Ground floor' : m.levelGuess === 'L1' ? 'First floor' : `Plan ${i + 1}`)}</figcaption></figure></a>`).join('')}</div>`
-          : `<div class="callout">${icon('alert')}<div><b>No floor plan.</b> WalkIn won’t invent a layout. Upload a plan you have rights to use.</div></div>`
+          : `<div class="callout">${icon('info')}<div><b>No floor plan in this listing.</b> ${photos.length ? 'WalkIn will look for a plan among the photos, and otherwise read the rooms from the photos and arrange an estimated layout.' : 'WalkIn will arrange an estimated layout from the bedrooms, bathrooms and area.'} Room positions will be marked as estimated.</div></div>`
       }
       <h3>Photos</h3>
       ${photos.length ? `<div class="scroller plans">${photos.map((m) => `<figure class="plan"><img src="${esc(mediaUrl(m))}" alt="Listing photo" /></figure>`).join('')}</div>` : `<div class="empty">${icon('photo', 22)}<br />No photos yet. Rooms will be marked as having no photo evidence.</div>`}
       ${p.missingData.length ? `<div class="callout">${icon('info')}<div><b>Not in this listing</b><ul>${p.missingData.map((m) => `<li>${esc(m.split(' — ')[0])}</li>`).join('')}</ul></div></div>` : ''}
       <p class="xs faint">${esc(p.sourceInfo.attribution)}. ${esc(p.sourceInfo.rightsNote)}</p>
       <div class="sticky-cta">
-        ${staticMode ? '' : `<button class="btn primary block" data-action="reconstruct" ${plans.length ? '' : 'disabled'}>${icon('cube')}Explore in 3D</button>`}
+        ${staticMode ? '' : `<button class="btn primary block" data-action="reconstruct">${icon('cube')}Explore in 3D</button>`}
         <button class="btn block ghost" data-action="open-scene" id="open-cached" hidden>Open saved 3D model</button>
         <p class="xs faint" style="text-align:center;margin:8px 0 0">AI reconstruction · dimensions are approximate</p>
       </div>`;
@@ -325,7 +332,7 @@ export class Panel {
     return `
       <div class="view-head">
         <button class="icon-btn" data-action="back-listing" aria-label="Back">${icon('back')}</button>
-        <div class="grow"><h2 class="truncate" style="font-size:17px">${esc(s.property.address)}</h2><div class="sub">${s.structure.levels.length} floors · ${s.structure.rooms.length} rooms</div></div>
+        <div class="grow"><h2 class="truncate" style="font-size:17px">${esc(s.property.address)}</h2><div class="sub">${s.structure.levels.length} floors · ${s.structure.rooms.length} rooms${estimatedLayout(s) ? ' · <span class="badge-est">estimated layout</span>' : ''}</div></div>
       </div>
       ${walking ? '' : `<div class="segmented" role="tablist">${(['explore', 'rooms', 'evidence'] as const).map((t) => `<button role="tab" data-action="tab" data-tab="${t}" class="${t === tab ? 'active' : ''}">${{ explore: 'Explore', rooms: 'Rooms', evidence: 'How it’s built' }[t]}</button>`).join('')}</div>`}
       ${walking || tab === 'explore' ? this.renderControls(s) : tab === 'rooms' ? this.renderRooms(s) : this.renderEvidence(s)}`;
@@ -450,8 +457,10 @@ export class Panel {
     const warns = geo.filter((c) => c.severity === 'warn').length;
     return `
       ${!f.liveMetaInference ? `<div class="callout" style="margin-top:14px">${icon('info')}<div><b>Demo data.</b> This model was built from a reference reading of the plan, not live Meta AI.</div></div>` : ''}
+      ${estimatedLayout(s) ? `<div class="callout" style="margin-top:14px">${icon('alert')}<div><b>Estimated layout.</b> ${f.layoutSource === 'photos' ? 'There was no floor plan, so the rooms were read from the photos and arranged into a believable plan.' : 'There was no floor plan or usable photos, so the rooms come from the listing details.'} The rooms exist, but their positions, sizes and doors are a guess.</div></div>` : ''}
       <h3>Sources</h3>
       <ul class="flags">
+        <li><span>Layout from</span><span>${esc(LAYOUT_LABELS[f.layoutSource] ?? f.layoutSource)}</span></li>
         <li><span>Floor plan read by</span><span>${esc(METHOD_LABELS[f.floorplanInterpretedBy] ?? f.floorplanInterpretedBy)}</span></li>
         <li><span>Photo evidence</span><span>${esc({ none: 'None', partial: 'Some rooms', 'all-rooms': 'All rooms' }[f.photoEvidence])}</span></li>
         <li><span>Furniture detection</span><span>${f.segmentationBy ? `${esc(METHOD_LABELS[f.segmentationBy])} · ${s.detections.length}` : 'Not run'}</span></li>
@@ -460,7 +469,7 @@ export class Panel {
         <li><span>Ceiling height</span><span>${f.ceilingHeightEstimated ? 'Estimated (2.4 m)' : 'From plan'}</span></li>
         <li><span>Scale</span><span>${f.scaleEstimated ? 'Estimated' : 'From printed sizes'}</span></li>
       </ul>
-      <h3>Source plans</h3>
+      ${plans.length ? '<h3>Source plans</h3>' : ''}
       <div class="scroller plans">${plans.map((m) => `<figure class="plan"><img src="${esc(mediaUrl(m))}" alt="Source floor plan" /></figure>`).join('')}</div>
       ${s.detections.length ? `<h3>Detected in photos</h3><div class="dets">${s.detections.slice(0, 24).map((d) => { const m = s.media.find((x) => x.id === d.mediaId); return m ? `<figure class="det"><img src="${esc(mediaUrl(m))}" alt="" />${d.maskKey && !staticMode ? `<img class="mask" src="${esc(absoluteApiUrl(`/api/masks/${d.maskKey.split('/').pop()}`))}" alt="" />` : ''}<span class="box" style="left:${d.box[0] * 100}%;top:${d.box[1] * 100}%;width:${(d.box[2] - d.box[0]) * 100}%;height:${(d.box[3] - d.box[1]) * 100}%"></span><figcaption>${esc(d.concept)} ${Math.round(d.score * 100)}%</figcaption></figure>` : ''; }).join('')}</div>` : ''}
       <h3>Geometry checks · <span style="color:${fails ? 'var(--bad)' : warns ? 'var(--warn)' : 'var(--ok)'}">${fails ? `${fails} failed` : warns ? `${warns} warnings` : 'all passed'}</span></h3>

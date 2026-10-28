@@ -92,6 +92,7 @@ describe('placement conventions', () => {
     for (const poly of [cw, ccw]) {
       const structure = buildStructure(
         {
+          layoutSource: 'floorplan',
           levels: [{ id: 'L', index: 0, name: 'G', planMediaId: 'm', ceilingHeightMeters: 2.4, rooms: [{ id: 'r', label: 'R', type: 'living', polygonPx: poly.map(([x, z]) => [x * 100, z * 100]), measured: { text: '4 x 3', widthM: 4, depthM: 3 }, confidence: 1 }], openings: [], stairs: [] }],
           statedTotalAreaSqM: null,
           uncertainties: [],

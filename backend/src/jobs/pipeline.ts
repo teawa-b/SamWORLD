@@ -15,6 +15,9 @@ import {
   SceneManifest,
   bounds,
   buildStructure,
+  layoutFromRoomList,
+  roomListFromFacts,
+  typicalFurniture,
   objectFootprint,
   placeObjects,
   validateFootprint,
@@ -33,7 +36,7 @@ import {
 import { config, metaConfigured } from '../config.js';
 import { imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
 import { AiBudget } from '../meta/client.js';
-import { assembleInterpretation, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
+import { assembleInterpretation, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
 import { segmentConcept } from '../meta/sam.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
 import { store } from '../store.js';
@@ -96,27 +99,51 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   await ctx.setState('INGESTED', 'ingest', 0.05);
   await ctx.log('ingest', `${plans.length} floor plan(s), ${photos.length} usable photo(s); live Meta inference ${metaConfigured() ? 'ON' : 'OFF (MODEL_API_KEY not set)'}`);
   if (skippedRights.length) await ctx.log('ingest', `${skippedRights.length} media item(s) skipped: usage rights unverified`, 'warn');
-  if (!plans.length) {
-    throw new PipelineError('NO_FLOORPLAN', 'This listing has no floor plan. Upload a plan you have rights to use; a layout will not be invented.');
-  }
   const corrections = store.get('roomMappings', property.id);
   const isFixture = property.sourceProvider === FIXTURE_PROVIDER;
   const live = metaConfigured();
   run.modelVersions = live ? { muse: config.meta.museModel, sam: config.meta.samModel } : {};
   run.promptVersions = live ? PROMPT_VERSIONS : {};
 
-  // ---- 2. Parse floor plan ---------------------------------------------------
-  const planImages = await loadPlanRasters(plans);
+  // ---- 2. Layout: floor plan → plan among the photos → photos → listing facts ----
+  let planImages = await loadPlanRasters(plans);
+  const photoData = await Promise.all(photos.slice(0, 50).map(async (m) => ({ media: m, buf: await readMedia(m) })));
   let interp = opts.forceReparse ? undefined : store.get('interpretations', property.id);
   if (interp) {
-    await ctx.log('parse', `Reusing cached floor-plan interpretation (${interp.provenance.method}); no AI call`);
+    await ctx.log('parse', `Reusing cached layout (${interp.layoutSource}, ${interp.provenance.method}); no AI call`);
   } else if (live && planImages.length) {
     interp = await parseWithMuse(ctx, planImages, property.areaSqM, config.meta.museModel);
   } else if (isFixture) {
     interp = FloorplanInterpretation.parse(fixtureFile(property.sourceListingId, 'interpretation.fixture.json'));
     await ctx.log('parse', live ? 'No raster plan available for Muse; using the fixture reference interpretation' : 'Using the fixture reference interpretation (hand-authored stand-in for Muse Spark)', 'warn');
   } else {
-    throw new PipelineError('NO_PARSER', live ? 'Floor plans are not in a model-readable raster format (jpeg/png/webp).' : 'MODEL_API_KEY is not set, so this floor plan cannot be read.');
+    const facts = { bedrooms: property.bedrooms, bathrooms: null, areaSqM: property.areaSqM, propertyType: property.status, description: null, address: property.address };
+    if (plans.length && !live) await ctx.log('parse', 'The floor plan can’t be read without MODEL_API_KEY; estimating the layout instead', 'warn');
+    else if (!plans.length) await ctx.log('parse', 'No floor plan in this listing; estimating the layout', 'warn');
+    if (live && photoData.length) {
+      const sample = photoData.slice(0, 20);
+      const r = await layoutFromPhotos({ budget, photos: sample.map((p) => toDataUrl(p.buf, p.media.mimeType)), facts });
+      if (r.floorplanPhotoIndex != null) {
+        // A floor plan was hiding among the photos: read it properly.
+        const m = sample[r.floorplanPhotoIndex].media;
+        await ctx.log('parse', `Found a floor plan among the listing photos (${m.id}); reading it`);
+        planImages = await loadPlanRasters([{ ...m, type: 'floorplan' }]);
+        interp = { ...(await parseWithMuse(ctx, planImages, property.areaSqM, config.meta.museModel)), layoutSource: 'photo-floorplan' };
+      } else if (r.rooms.length) {
+        await ctx.log('parse', `Muse inferred ${r.rooms.length} rooms from ${sample.length} photos; arranging an estimated layout`);
+        interp = layoutFromRoomList({ rooms: r.rooms, statedTotalAreaSqM: property.areaSqM, provenance: r.provenance, uncertainties: r.notes, confidence: 0.45, layoutSource: 'photos' });
+      }
+    }
+    if (!interp) {
+      interp = layoutFromRoomList({
+        rooms: roomListFromFacts(facts),
+        statedTotalAreaSqM: property.areaSqM,
+        provenance: { method: 'deterministic', note: 'Estimated from listing details (bedrooms, area); no floor plan or AI room reading', at: now() },
+        confidence: 0.3,
+        layoutSource: 'listing-details',
+      });
+      await ctx.log('parse', `Estimated a layout from the listing details (${property.bedrooms ?? '?'} bedrooms, ${property.areaSqM ? `${property.areaSqM} m²` : 'area unknown'})`, 'warn');
+    }
   }
   // Remap fixture plan media ids onto this property's media ids.
   for (const lvl of interp.levels) {
@@ -126,7 +153,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
 
   let structure = buildFromInterp(interp, property.id, corrections);
   let geomChecks = verifyGeometry(structure, interp, [], [], property.areaSqM);
-  if (live && config.meta.escalationEnabled && interp.provenance.method === 'meta:muse-spark-1.3' && geomChecks.some((c) => c.severity === 'fail')) {
+  if (live && config.meta.escalationEnabled && interp.layoutSource === 'floorplan' && interp.provenance.method === 'meta:muse-spark-1.3' && geomChecks.some((c) => c.severity === 'fail')) {
     await ctx.log('parse', `Geometry checks failed on the Muse Spark reading; escalating to ${config.meta.escalationModel}`, 'warn');
     interp = await parseWithMuse(ctx, planImages, property.areaSqM, config.meta.escalationModel);
     structure = buildFromInterp(interp, property.id, corrections);
@@ -145,6 +172,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   const prevVersion = store.get('scenes', property.id)?.sceneVersion ?? 0;
   const baseFlags: EvidenceFlags = {
     liveMetaInference: false,
+    layoutSource: interp.layoutSource,
     floorplanInterpretedBy: interp.provenance.method,
     photoEvidence: 'none',
     segmentationBy: null,
@@ -162,7 +190,6 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   // ---- 4. Photo → room matching ---------------------------------------------------
   let matches: MediaRoomMatch[] = [];
   let visibleObjects: Record<string, string[]> = {};
-  const photoData = await Promise.all(photos.slice(0, 50).map(async (m) => ({ media: m, buf: await readMedia(m) })));
   if (!photos.length) {
     await ctx.log('match', 'No photos supplied — every room is marked "no photo evidence"', 'warn');
   } else if (!live) {
@@ -265,6 +292,13 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     if (extra.length) await ctx.log('place', `${extra.length} hand-authored placement suggestions used for rooms without AI evidence (labelled as such)`, 'warn');
     candidates = [...candidates, ...extra];
   }
+  if (!isFixture) {
+    // Rooms with no AI suggestions get typical furniture, labelled as such.
+    const covered = new Set(candidates.map((c) => c.roomId));
+    const typical = structure.rooms.filter((r) => !covered.has(r.id)).flatMap((r) => typicalFurniture(r, now(), structure));
+    if (typical.length) await ctx.log('place', `${typical.length} typical furniture items added for rooms without photo evidence (labelled as typical, not observed)`);
+    candidates = [...candidates, ...typical];
+  }
   const placed = placeObjects(structure, candidates, { method: 'deterministic', note: 'placement engine', at: now() });
   let objects = applySceneCorrections(placed.objects, structure, property.id);
   await ctx.log('place', `${objects.length} furnishings placed, ${placed.rejected.length} suggestion(s) rejected by constraints`, placed.rejected.length ? 'warn' : 'info');
@@ -319,6 +353,10 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
       ...(roomSurfaces.length < structure.rooms.length ? [`${structure.rooms.length - roomSurfaces.length} room(s) use default finishes for their room type (no photo to sample).`] : []),
       ...(interp.provenance.method === 'fixture:hand-authored' ? ['Floor plan geometry comes from a hand-authored reference reading, not live Muse inference.'] : []),
       ...(objects.some((o) => o.provenance.note?.includes('fixture')) ? ['Some furniture positions come from hand-authored suggestions, not photo evidence.'] : []),
+      ...(objects.some((o) => o.placementNotes.some((n) => n.startsWith('Typical '))) ? ['Furniture in rooms without photos is typical for the room type, not what is actually there.'] : []),
+      ...(interp.layoutSource !== 'floorplan' && interp.layoutSource !== 'photo-floorplan'
+        ? [interp.layoutSource === 'photos' ? 'No floor plan: the room list was read from the photos and arranged into an estimated layout.' : 'No floor plan or usable photos: the layout is estimated from the listing details.']
+        : []),
       'Furniture is represented by proxy shapes sized from estimates.',
       ...interp.uncertainties,
     ],
@@ -355,7 +393,8 @@ async function parseWithMuse(ctx: Ctx, planImages: PlanRaster[], areaSqM: number
 }
 
 function buildFromInterp(interp: FloorplanInterpretation, propertyId: string, corrections: ReturnType<typeof store.get<'roomMappings'>>): Structure {
-  let scaleOverride: { metersPerPx: number; method: 'user-reference' } | undefined;
+  let scaleOverride: { metersPerPx: number; method: 'user-reference' | 'estimated-layout' } | undefined =
+    interp.layoutSource === 'photos' || interp.layoutSource === 'listing-details' ? { metersPerPx: 0.01, method: 'estimated-layout' } : undefined;
   const ref = corrections?.referenceMeasurement;
   if (ref) {
     const room = interp.levels.flatMap((l) => l.rooms).find((r) => r.id === ref.roomId);

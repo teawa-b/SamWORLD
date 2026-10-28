@@ -26,6 +26,7 @@ export const PROMPT_VERSIONS = {
   placement: 'placement-v1',
   planReview: 'plan-review-v1',
   surfaces: 'surfaces-v1',
+  layoutFromPhotos: 'layout-from-photos-v1',
 };
 
 const provenance = (model: string, promptVersion: string): Provenance => ({
@@ -162,6 +163,53 @@ export function assembleInterpretation(
     uncertainties: parts.flatMap((p) => p.uncertainties.map((u) => `${p.level.name}: ${u}`)),
     provenance: parts[0].provenance,
   });
+}
+
+// ---------------------------------------------------------------------------
+// 1b. No floor plan: find one among the photos, or infer the room list
+// ---------------------------------------------------------------------------
+
+const layoutSchema = obj({
+  floorplanPhotoIndex: { type: ['integer', 'null'] },
+  floors: { type: 'integer' },
+  rooms: {
+    type: 'array',
+    items: obj({ label: str, type: { type: 'string', enum: RoomType.options }, areaM2: num, level: { type: 'integer' }, photoIndexes: { type: 'array', items: { type: 'integer' } } }),
+  },
+  notes: { type: 'array', items: str },
+});
+
+export interface PhotoLayout {
+  floorplanPhotoIndex: number | null;
+  rooms: { label: string; type: z.infer<typeof RoomType>; areaM2: number; level: number; photoIndexes: number[] }[];
+  notes: string[];
+  provenance: Provenance;
+}
+
+export async function layoutFromPhotos(opts: {
+  budget: AiBudget;
+  photos: string[];
+  facts: { bedrooms: number | null; bathrooms?: number | null; areaSqM: number | null; propertyType?: string | null; description?: string | null; address: string };
+}): Promise<PhotoLayout> {
+  const f = opts.facts;
+  const { data, model } = await museJson<Omit<PhotoLayout, 'provenance'> & { floors: number }>({
+    budget: opts.budget,
+    system:
+      'You help reconstruct a home from a property listing that has no separate floor plan. First, if any photo IS a floor plan drawing, return its index as floorplanPhotoIndex. Otherwise return null and list every room you believe the home has: type, a short label, a realistic area in square metres, which floor (0 = ground/entry level), and the indexes of photos that show it. Use the listing facts (bedroom count, area) as ground truth for counts and total size. Include halls/landings only if visible. Do not invent extra rooms beyond what the facts and photos support.',
+    text: `Listing: ${f.address}. Facts: ${f.bedrooms ?? '?'} bedrooms, ${f.bathrooms ?? '?'} bathrooms, ${f.areaSqM ? `${f.areaSqM} m²` : 'area unknown'}, type: ${f.propertyType ?? 'unknown'}.\nDescription: ${(f.description ?? '').slice(0, 1200)}\n${opts.photos.length} photos follow, numbered from 0.`,
+    images: opts.photos,
+    schemaName: 'layout_from_photos',
+    schema: layoutSchema,
+  });
+  const n = opts.photos.length;
+  return {
+    floorplanPhotoIndex: data.floorplanPhotoIndex != null && data.floorplanPhotoIndex >= 0 && data.floorplanPhotoIndex < n ? data.floorplanPhotoIndex : null,
+    rooms: data.rooms
+      .filter((r) => r.areaM2 > 0.5 && r.areaM2 < 200)
+      .map((r) => ({ ...r, level: Math.max(0, Math.min(3, r.level)), photoIndexes: r.photoIndexes.filter((i) => i >= 0 && i < n) })),
+    notes: data.notes.slice(0, 6),
+    provenance: provenance(model, PROMPT_VERSIONS.layoutFromPhotos),
+  };
 }
 
 // ---------------------------------------------------------------------------

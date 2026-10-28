@@ -327,7 +327,7 @@ export async function importRealty(provider: RealtyProvider, listingId: string, 
   media.sort((a, b) => (a.type === b.type ? a.id.localeCompare(b.id, undefined, { numeric: true }) : a.type === 'floorplan' ? -1 : 1));
 
   const missing: string[] = [];
-  if (!media.some((m) => m.type === 'floorplan')) missing.push(`No floor plan in this ${PROVIDER_LABEL[provider]} listing, so a layout can’t be reconstructed.`);
+  if (!media.some((m) => m.type === 'floorplan')) missing.push(`No floor plan in this ${PROVIDER_LABEL[provider]} listing, so the layout will be estimated from the photos and listing details.`);
   if (!media.some((m) => m.type === 'photo')) missing.push('No photos available.');
   missing.push('Ceiling heights not stated.');
   const property: Property = {
