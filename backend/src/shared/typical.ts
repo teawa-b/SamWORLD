@@ -1,6 +1,6 @@
 /**
- * Typical furniture for a room type, used only where there is no photo
- * evidence (e.g. listings without photos, or rooms nobody photographed).
+ * Typical furniture by room type: the offline fallback for rooms nobody
+ * photographed (live runs ask Muse instead, see meta/muse.ts furnishRooms).
  * Labelled as typical, never as observed; the placement engine still checks
  * every item against walls, doors and other furniture.
  */

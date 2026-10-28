@@ -36,7 +36,7 @@ import {
 import { config, metaConfigured } from '../config.js';
 import { imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
 import { AiBudget } from '../meta/client.js';
-import { assembleInterpretation, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
+import { assembleInterpretation, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, furnishRooms, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
 import { segmentConcept } from '../meta/sam.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
 import { store } from '../store.js';
@@ -293,11 +293,23 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     candidates = [...candidates, ...extra];
   }
   if (!isFixture) {
-    // Rooms with no AI suggestions get typical furniture, labelled as such.
+    // Rooms with no photo-based suggestions get typical furniture, labelled as such:
+    // proposed by Muse when live, otherwise from a fixed table by room type.
     const covered = new Set(candidates.map((c) => c.roomId));
-    const typical = structure.rooms.filter((r) => !covered.has(r.id)).flatMap((r) => typicalFurniture(r, now(), structure));
-    if (typical.length) await ctx.log('place', `${typical.length} typical furniture items added for rooms without photo evidence (labelled as typical, not observed)`);
-    candidates = [...candidates, ...typical];
+    const empty = structure.rooms.filter((r) => !covered.has(r.id) && r.type !== 'hall' && r.type !== 'landing');
+    let typical: PlacementCandidate[] = [];
+    if (live && empty.length) {
+      try {
+        typical = await furnishRooms({ budget, structure, roomIds: empty.map((r) => r.id) });
+        await ctx.log('place', `Muse furnished ${new Set(typical.map((c) => c.roomId)).size} room(s) without photos (${typical.length} typical items, not observed)`);
+      } catch (e) {
+        await ctx.log('place', `Muse furnishing failed, using typical furniture by room type: ${(e as Error).message}`, 'warn');
+      }
+    }
+    const museRooms = new Set(typical.map((c) => c.roomId));
+    const table = empty.filter((r) => !museRooms.has(r.id)).flatMap((r) => typicalFurniture(r, now(), structure));
+    if (table.length) await ctx.log('place', `${table.length} typical furniture items added by room type (labelled as typical, not observed)`);
+    candidates = [...candidates, ...typical, ...table];
   }
   const placed = placeObjects(structure, candidates, { method: 'deterministic', note: 'placement engine', at: now() });
   let objects = applySceneCorrections(placed.objects, structure, property.id);

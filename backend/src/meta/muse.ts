@@ -27,6 +27,7 @@ export const PROMPT_VERSIONS = {
   planReview: 'plan-review-v1',
   surfaces: 'surfaces-v1',
   layoutFromPhotos: 'layout-from-photos-v1',
+  furnish: 'furnish-v1',
 };
 
 const provenance = (model: string, promptVersion: string): Provenance => ({
@@ -442,6 +443,74 @@ export async function reviewAgainstPlan(opts: {
     findings: data.findings.slice(0, 30).map((f, i) => ({ id: `review-${i}`, severity: f.severity, message: f.message, subjectIds: f.roomIds })),
     provenance: provenance(model, PROMPT_VERSIONS.planReview),
   };
+}
+
+const furnishSchema = obj({
+  rooms: {
+    type: 'array',
+    items: obj({
+      roomId: str,
+      objects: {
+        type: 'array',
+        items: obj({
+          kind: str,
+          anchorType: { type: 'string', enum: ['against-wall', 'centre', 'corner'] },
+          side: { type: ['string', 'null'], enum: ['north', 'south', 'east', 'west', null] },
+          secondSide: { type: ['string', 'null'], enum: ['north', 'south', 'east', 'west', null] },
+          along: num,
+          widthM: num,
+          heightM: num,
+          depthM: num,
+          rationale: str,
+        }),
+      },
+    }),
+  },
+});
+
+/**
+ * Typical furniture for rooms nobody photographed, proposed by Muse from the
+ * room type, size and door positions. One text-only call for all rooms. The
+ * result is labelled as typical, never as observed.
+ */
+export async function furnishRooms(opts: { budget: AiBudget; structure: Structure; roomIds: string[] }): Promise<PlacementCandidate[]> {
+  const rooms = opts.structure.rooms.filter((r) => opts.roomIds.includes(r.id));
+  if (!rooms.length) return [];
+  const { data, model } = await museJson<{
+    rooms: { roomId: string; objects: { kind: string; anchorType: 'against-wall' | 'centre' | 'corner'; side: WallSide | null; secondSide: WallSide | null; along: number; widthM: number; heightM: number; depthM: number; rationale: string }[] }[];
+  }>({
+    budget: opts.budget,
+    system:
+      'You furnish empty rooms of a home with the furniture a typical home of this kind would have, for a 3D preview. Use 0–5 pieces per room, sized realistically in meters (width along the wall, depth into the room) and scaled to the room. Keep pieces clear of doors and archways and leave walking space. Halls, landings and stairs usually need nothing. Place pieces as relationships ("against the north wall, 30% along"). along is 0..1 from the west end (north/south walls) or north end (east/west walls). Return each room by its id.',
+    text: rooms.map((r) => `id ${r.id} (${r.type}): ${describeRoomWalls(opts.structure, r.id)}`).join('\n'),
+    images: [],
+    schemaName: 'furnish_rooms',
+    schema: furnishSchema,
+  });
+  const prov = provenance(model, PROMPT_VERSIONS.furnish);
+  return data.rooms
+    .filter((r) => rooms.some((x) => x.id === r.roomId))
+    .flatMap((r) =>
+      r.objects.slice(0, 6).map((o, i) =>
+        PlacementCandidate.parse({
+          id: `${r.roomId}-typical-${i}-${o.kind.replace(/\W+/g, '-')}`,
+          roomId: r.roomId,
+          kind: o.kind.toLowerCase().replace(/\s+/g, '-'),
+          anchor:
+            o.anchorType === 'centre'
+              ? { type: 'centre' }
+              : o.anchorType === 'corner' && o.side && o.secondSide
+                ? { type: 'corner', sides: [o.side, o.secondSide] }
+                : { type: 'against-wall', side: o.side ?? 'north', along: clamp01(o.along) },
+          sizeM: [clampSize(o.widthM), clampSize(o.heightM), clampSize(o.depthM)],
+          sourceDetectionIds: [],
+          sourceMediaIds: [],
+          confidence: 0.3,
+          rationale: `Typical furniture, not observed: ${o.rationale}`,
+          provenance: prov,
+        }),
+      ),
+    );
 }
 
 function clamp01(v: number) {

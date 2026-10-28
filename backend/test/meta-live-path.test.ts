@@ -41,6 +41,13 @@ const fake = createServer(async (req, res) => {
     };
   } else if (name === 'room_placements') {
     content = { objects: [] };
+  } else if (name === 'furnish_rooms') {
+    content = {
+      rooms: [
+        { roomId: 'L1-bed1', objects: [{ kind: 'Double Bed', anchorType: 'against-wall', side: 'north', secondSide: null, along: 0.5, widthM: 1.4, heightM: 0.6, depthM: 2, rationale: 'main bedroom' }] },
+        { roomId: 'not-a-room', objects: [{ kind: 'sofa', anchorType: 'centre', side: null, secondSide: null, along: 0, widthM: 2, heightM: 0.8, depthM: 0.9, rationale: 'x' }] },
+      ],
+    };
   } else if (name === 'reconstruction_review') {
     content = { findings: [{ severity: 'pass', message: 'Room count matches the plan (fake reviewer)', roomIds: [] }] };
   }
@@ -103,6 +110,19 @@ describe('live Meta path (against a fake endpoint)', () => {
     expect(living.floor.texture).toBeNull();
     expect(living.floor.colorHex).toBe('#a87b4f');
     expect(scene.evidenceFlags.surfacesFromPhotos).toBe(1);
+  });
+
+  it('furnishes unphotographed rooms with Muse, labelled as typical', async () => {
+    const imp = (await app.inject({ method: 'POST', url: '/api/properties/import', payload: { provider: 'fixture', listingId: 'demo-house-001' } })).json();
+    const scene = (await app.inject({ url: `/api/properties/${imp.property.id}/scene` })).json();
+    const { furnishRooms } = await import('../src/meta/muse.js');
+    const { AiBudget } = await import('../src/meta/client.js');
+    const c = await furnishRooms({ budget: new AiBudget(), structure: scene.structure, roomIds: scene.structure.rooms.map((r: any) => r.id) });
+    expect(c).toHaveLength(1);
+    expect(c[0]).toMatchObject({ roomId: 'L1-bed1', kind: 'double-bed', sourceMediaIds: [], confidence: 0.3 });
+    expect(c[0].rationale.startsWith('Typical furniture, not observed')).toBe(true);
+    expect(c[0].provenance.promptVersion).toBe('furnish-v1');
+    expect(requests.find((r) => r.body.response_format?.json_schema?.name === 'furnish_rooms')!.body.model).toBe('muse-spark-1.3');
   });
 });
 
