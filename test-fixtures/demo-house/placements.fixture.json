@@ -1,0 +1,432 @@
+{
+  "candidates": [
+    {
+      "id": "obj-sofa",
+      "roomId": "L0-living",
+      "kind": "sofa",
+      "anchor": {
+        "type": "against-wall",
+        "side": "east",
+        "along": 0.5
+      },
+      "sizeM": [
+        2.2,
+        0.85,
+        0.95
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Typical: sofa on the long wall facing the TV.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-tv",
+      "roomId": "L0-living",
+      "kind": "tv-unit",
+      "anchor": {
+        "type": "against-wall",
+        "side": "west",
+        "along": 0.25
+      },
+      "sizeM": [
+        1.6,
+        0.55,
+        0.45
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Opposite the sofa, clear of the hall door.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-coffee",
+      "roomId": "L0-living",
+      "kind": "coffee-table",
+      "anchor": {
+        "type": "centre"
+      },
+      "sizeM": [
+        1.1,
+        0.45,
+        0.6
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.45,
+      "rationale": "Between sofa and TV.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-armchair",
+      "roomId": "L0-living",
+      "kind": "armchair",
+      "anchor": {
+        "type": "against-wall",
+        "side": "north",
+        "along": 0.15
+      },
+      "sizeM": [
+        0.85,
+        0.9,
+        0.85
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Beside the front window.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-units",
+      "roomId": "L0-kitchen",
+      "kind": "kitchen-units",
+      "anchor": {
+        "type": "against-wall",
+        "side": "south",
+        "along": 0.35
+      },
+      "sizeM": [
+        3.0,
+        0.9,
+        0.6
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Run of base units under the rear window.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-fridge",
+      "roomId": "L0-kitchen",
+      "kind": "fridge",
+      "anchor": {
+        "type": "against-wall",
+        "side": "west",
+        "along": 0.8
+      },
+      "sizeM": [
+        0.7,
+        1.8,
+        0.7
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Tall appliance at the end of the run.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-dining",
+      "roomId": "L0-kitchen",
+      "kind": "dining-table",
+      "anchor": {
+        "type": "centre"
+      },
+      "sizeM": [
+        1.6,
+        0.75,
+        0.9
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.45,
+      "rationale": "Diner area.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-washer",
+      "roomId": "L0-utility",
+      "kind": "washing-machine",
+      "anchor": {
+        "type": "against-wall",
+        "side": "south",
+        "along": 0.7
+      },
+      "sizeM": [
+        0.6,
+        0.85,
+        0.6
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Utility appliance.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-wc",
+      "roomId": "L0-utility",
+      "kind": "toilet",
+      "anchor": {
+        "type": "against-wall",
+        "side": "west",
+        "along": 0.3
+      },
+      "sizeM": [
+        0.4,
+        0.8,
+        0.7
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "WC pan.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-bed1",
+      "roomId": "L1-bed1",
+      "kind": "bed",
+      "anchor": {
+        "type": "against-wall",
+        "side": "west",
+        "along": 0.4
+      },
+      "sizeM": [
+        1.5,
+        0.6,
+        2.0
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Double bed head against the wall.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-wardrobe1",
+      "roomId": "L1-bed1",
+      "kind": "wardrobe",
+      "anchor": {
+        "type": "against-wall",
+        "side": "east",
+        "along": 0.3
+      },
+      "sizeM": [
+        1.2,
+        2.0,
+        0.6
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Freestanding wardrobe.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-bed2",
+      "roomId": "L1-bed2",
+      "kind": "bed",
+      "anchor": {
+        "type": "against-wall",
+        "side": "east",
+        "along": 0.35
+      },
+      "sizeM": [
+        1.5,
+        0.6,
+        2.0
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Double bed.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-desk2",
+      "roomId": "L1-bed2",
+      "kind": "desk",
+      "anchor": {
+        "type": "against-wall",
+        "side": "north",
+        "along": 0.15
+      },
+      "sizeM": [
+        1.2,
+        0.75,
+        0.6
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Desk near the window.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-bed3",
+      "roomId": "L1-bed3",
+      "kind": "bed",
+      "anchor": {
+        "type": "against-wall",
+        "side": "east",
+        "along": 0.5
+      },
+      "sizeM": [
+        1.4,
+        0.6,
+        2.0
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Bed against the side wall.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-wardrobe3",
+      "roomId": "L1-bed3",
+      "kind": "wardrobe",
+      "anchor": {
+        "type": "against-wall",
+        "side": "west",
+        "along": 0.5
+      },
+      "sizeM": [
+        1.0,
+        2.0,
+        0.6
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Wardrobe.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-bath",
+      "roomId": "L1-bath",
+      "kind": "bathtub",
+      "anchor": {
+        "type": "against-wall",
+        "side": "west",
+        "along": 0.5
+      },
+      "sizeM": [
+        1.7,
+        0.55,
+        0.7
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Bath along the side wall.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-basin",
+      "roomId": "L1-bath",
+      "kind": "basin",
+      "anchor": {
+        "type": "against-wall",
+        "side": "east",
+        "along": 0.5
+      },
+      "sizeM": [
+        0.6,
+        0.85,
+        0.45
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "Basin.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "obj-wc1",
+      "roomId": "L1-bath",
+      "kind": "toilet",
+      "anchor": {
+        "type": "against-wall",
+        "side": "south",
+        "along": 0.8
+      },
+      "sizeM": [
+        0.4,
+        0.8,
+        0.7
+      ],
+      "sourceDetectionIds": [],
+      "sourceMediaIds": [],
+      "confidence": 0.5,
+      "rationale": "WC pan.",
+      "provenance": {
+        "method": "fixture:hand-authored",
+        "note": "Hand-written placement suggestion standing in for Muse Spark output; no photo evidence was available.",
+        "at": "2026-10-28T00:00:00.000Z"
+      }
+    }
+  ]
+}
