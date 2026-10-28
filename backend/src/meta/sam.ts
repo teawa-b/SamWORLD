@@ -79,7 +79,7 @@ export async function segmentConcept(opts: {
       mediaId: opts.mediaId,
       concept: phrase,
       box: [box.left / width, box.top / height, box.right / width, box.bottom / height],
-      score: box.confidence ?? mask?.confidence ?? 0.5,
+      score: box.confidence ?? mask?.confidence ?? null,
       maskKey: mask ? `masks/${id}.svg` : null,
       provenance: prov,
     });

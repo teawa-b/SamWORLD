@@ -80,6 +80,7 @@ export async function museJson<T>(opts: {
   images?: string[]; // data: URLs (jpeg/png/webp/gif)
   schemaName: string;
   schema: JsonSchema;
+  effort?: 'minimal' | 'low' | 'medium' | 'high';
 }): Promise<{ data: T; model: string }> {
   const model = opts.model ?? config.meta.museModel;
   opts.budget.reserve(model);
@@ -95,6 +96,7 @@ export async function museJson<T>(opts: {
         ],
       },
     ],
+    reasoning_effort: opts.effort ?? config.meta.reasoningEffort,
     response_format: {
       type: 'json_schema',
       json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },

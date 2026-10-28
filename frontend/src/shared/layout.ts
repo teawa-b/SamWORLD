@@ -16,6 +16,8 @@ export interface RoomSpec {
   type: RoomType;
   areaM2: number;
   level: number;
+  /** Street side or garden side, when the photos, label or description say so. */
+  side?: 'front' | 'rear' | 'unknown';
 }
 
 export interface ListingFacts {
@@ -69,10 +71,21 @@ interface Rect {
   row: 'top' | 'bottom' | 'corridor';
 }
 
+const sideOf = (r: RoomSpec): 'front' | 'rear' | null =>
+  r.side === 'front' || r.side === 'rear' ? r.side : /\bfront\b/i.test(r.label) ? 'front' : /\b(rear|back)\b/i.test(r.label) ? 'rear' : null;
+
+/** [top row = rear, bottom row = front]. */
 function splitRows(rooms: RoomSpec[]): [RoomSpec[], RoomSpec[]] {
+  const area = (l: RoomSpec[]) => l.reduce((a, r) => a + r.areaM2, 0);
+  if (rooms.some((r) => sideOf(r))) {
+    // Known front/rear rooms go on their side; the rest balance the rows by area.
+    const top = rooms.filter((r) => sideOf(r) === 'rear');
+    const bottom = rooms.filter((r) => sideOf(r) === 'front');
+    for (const r of rooms.filter((x) => !sideOf(x)).sort((a, b) => b.areaM2 - a.areaM2)) (area(top) <= area(bottom) ? top : bottom).push(r);
+    if (top.length && bottom.length) return [top, bottom];
+  }
   let top = rooms.filter((r) => DAY.includes(r.type));
   let bottom = rooms.filter((r) => !DAY.includes(r.type));
-  const area = (l: RoomSpec[]) => l.reduce((a, r) => a + r.areaM2, 0);
   if (!top.length || !bottom.length) {
     const all = [...rooms].sort((a, b) => b.areaM2 - a.areaM2);
     top = [];

@@ -43,9 +43,11 @@ export const config = {
     imageModel: process.env.MUSE_IMAGE_MODEL ?? 'muse-image-1.0',
     redesignEnabled: bool(process.env.REDESIGN_ENABLED, false),
     timeoutMs: int(process.env.AI_TIMEOUT_MS, 120_000),
-    maxCallsPerRun: int(process.env.AI_MAX_CALLS_PER_RUN, 40),
-    maxSamImagesPerRun: int(process.env.SAM_MAX_IMAGES_PER_RUN, 8),
-    maxSamConceptsPerImage: int(process.env.SAM_MAX_CONCEPTS_PER_IMAGE, 4),
+    maxCallsPerRun: int(process.env.AI_MAX_CALLS_PER_RUN, 120),
+    maxSamImagesPerRun: int(process.env.SAM_MAX_IMAGES_PER_RUN, 12),
+    maxSamConceptsPerImage: int(process.env.SAM_MAX_CONCEPTS_PER_IMAGE, 6),
+    // Muse Spark is a reasoning model; perception-style steps don't need long thinking.
+    reasoningEffort: (process.env.MUSE_REASONING_EFFORT ?? 'low') as 'minimal' | 'low' | 'medium' | 'high',
     maxRedesignsPerDay: int(process.env.REDESIGN_MAX_PER_DAY, 10),
   },
 

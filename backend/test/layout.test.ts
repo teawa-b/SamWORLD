@@ -40,6 +40,28 @@ describe('estimated layouts (no floor plan)', () => {
     }
   });
 
+  it('puts front rooms on the street side and rear rooms on the garden side', () => {
+    const interp = layoutFromRoomList({
+      rooms: [
+        { label: 'Rear living room', type: 'living', areaM2: 16, level: 0 },
+        { label: 'Kitchen', type: 'kitchen', areaM2: 10, level: 0, side: 'front' },
+        { label: 'Front double bedroom', type: 'bedroom', areaM2: 14, level: 1 },
+        { label: 'Bedroom 2', type: 'bedroom', areaM2: 10, level: 1, side: 'rear' },
+        { label: 'Bathroom', type: 'bathroom', areaM2: 5, level: 1 },
+      ],
+      statedTotalAreaSqM: null,
+      provenance: prov,
+      confidence: 0.45,
+      layoutSource: 'photos',
+    });
+    const z = (label: string) => Math.max(...interp.levels.flatMap((l) => l.rooms).find((r) => r.label === label)!.polygonPx.map((p) => p[1]));
+    const D = Math.max(...interp.levels[0].rooms.flatMap((r) => r.polygonPx.map((p) => p[1])));
+    expect(z('Kitchen')).toBe(D);
+    expect(z('Front double bedroom')).toBe(D);
+    expect(z('Rear living room')).toBeLessThan(D);
+    expect(z('Bedroom 2')).toBeLessThan(D);
+  });
+
   it('places typical furniture in estimated rooms without blocking doors', () => {
     const { structure } = build({ bedrooms: 3, bathrooms: 2, areaSqM: 110, propertyType: 'Terraced house' });
     const cands = structure.rooms.flatMap((r) => typicalFurniture(r, '', structure));

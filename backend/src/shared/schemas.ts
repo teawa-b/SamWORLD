@@ -260,7 +260,8 @@ export const Detection = z.object({
   concept: z.string(),
   /** Normalised [x0,y0,x1,y1] in 0..1 image space. */
   box: z.tuple([z.number(), z.number(), z.number(), z.number()]),
-  score: Confidence,
+  /** Null when SAM returns no confidence for the detection. */
+  score: Confidence.nullable(),
   maskKey: z.string().nullable(),
   provenance: Provenance,
 });

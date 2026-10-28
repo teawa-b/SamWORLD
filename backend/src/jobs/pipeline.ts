@@ -52,8 +52,19 @@ export class PipelineError extends Error {
   }
 }
 
-/** Noun phrases SAM is asked about; Muse's visible-object list is intersected with this. */
-const SAM_CONCEPTS = ['sofa', 'armchair', 'bed', 'dining table', 'coffee table', 'chair', 'desk', 'wardrobe', 'tv', 'refrigerator', 'kitchen cabinets', 'bathtub', 'toilet', 'lamp', 'rug'];
+/** Things SAM shouldn't be asked about: structure and fittings, not furniture. */
+const NOT_FURNITURE = /\b(wall|floor|ceiling|window|door|curtain|blind|socket|switch|light|lamp shade|skirting|radiator|carpet|tile|stair|banister|rail|frame|picture|plant|ceiling light)s?\b/i;
+const FALLBACK_CONCEPTS = ['sofa', 'bed', 'table', 'chair', 'cabinet', 'wardrobe'];
+
+/** Noun phrases to ask SAM about for one photo: what Muse saw there, cleaned up. */
+function samConcepts(seen: string[], max: number): string[] {
+  const out = new Set<string>();
+  for (const raw of seen) {
+    const c = raw.toLowerCase().replace(/[^a-z\s-]/g, '').replace(/\s+/g, ' ').trim();
+    if (c && c.split(' ').length <= 3 && !NOT_FURNITURE.test(c)) out.add(c);
+  }
+  return [...(out.size ? out : FALLBACK_CONCEPTS)].slice(0, max);
+}
 
 interface Ctx {
   run: ReconstructionRun;
@@ -126,6 +137,8 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   let planImages = await loadPlanRasters(plans);
   const photoData = await Promise.all(photos.slice(0, 50).map(async (m) => ({ media: m, buf: await readMedia(m) })));
   let interp = opts.forceReparse ? undefined : store.get('interpretations', property.id);
+  // Estimated layouts are cheap to redo: drop ones made by an older prompt, or without AI now that it's on.
+  if (interp && ((interp.layoutSource === 'photos' && interp.provenance.promptVersion !== PROMPT_VERSIONS.layoutFromPhotos) || (interp.layoutSource === 'listing-details' && live))) interp = undefined;
   if (interp) {
     await ctx.log('parse', `Reusing cached layout (${interp.layoutSource}, ${interp.provenance.method}); no AI call`);
   } else if (live && planImages.length) {
@@ -236,17 +249,16 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   // Wall/floor appearance from photos, used to texture the model.
   const roomSurfaces: RoomSurfaces[] = [];
   if (live) {
-    for (const room of structure.rooms.filter((r) => r.linkedMediaIds.length)) {
-      const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 4);
+    await pool(structure.rooms.filter((r) => r.linkedMediaIds.length), 4, async (room) => {
+      const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 3);
       try {
         roomSurfaces.push(
           await readRoomSurfaces({ budget, roomId: room.id, roomLabel: room.label, photos: roomPhotos.map((p) => ({ mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType) })) }),
         );
       } catch (e) {
         await ctx.log('match', `Reading finishes for ${room.label} failed: ${(e as Error).message}`, 'warn');
-        if ((e as { code?: string }).code === 'AI_BUDGET_EXCEEDED') break;
       }
-    }
+    });
     if (roomSurfaces.length) await ctx.log('match', `Wall and floor finishes read from photos for ${roomSurfaces.length} room(s)`);
   }
   await ctx.setState('MEDIA_MATCHED', 'match', 0.5);
@@ -255,26 +267,26 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   const detections: Detection[] = [];
   if (live && photoData.length) {
     const targets = photoData.filter((p) => matches.some((m) => m.mediaId === p.media.id && m.roomId)).slice(0, config.meta.maxSamImagesPerRun);
+    const jobs: { p: (typeof photoData)[number]; size: { width: number; height: number }; concept: string }[] = [];
     for (const p of targets) {
       const size = imageSize(p.buf);
       if (!size) {
         await ctx.log('segment', `Could not read image size for ${p.media.id}; skipped`, 'warn');
         continue;
       }
-      const seen = visibleObjects[p.media.id] ?? [];
-      const concepts = SAM_CONCEPTS.filter((c) => seen.some((s) => s.includes(c) || c.includes(s))).slice(0, config.meta.maxSamConceptsPerImage);
-      for (const concept of concepts.length ? concepts : ['sofa', 'bed', 'table'].slice(0, config.meta.maxSamConceptsPerImage)) {
-        try {
-          const res = await segmentConcept({ budget, mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType), imageSize: size, concept });
-          detections.push(...res.detections);
-          await mkdir(join(config.dataDir, 'masks'), { recursive: true });
-          for (const m of res.masks) await writeFile(join(config.dataDir, 'masks', `${m.detectionId}.svg`), m.svg);
-        } catch (e) {
-          await ctx.log('segment', `SAM "${concept}" on ${p.media.id} failed: ${(e as Error).message}`, 'warn');
-          if ((e as { code?: string }).code === 'AI_BUDGET_EXCEEDED') break;
-        }
-      }
+      for (const concept of samConcepts(visibleObjects[p.media.id] ?? [], config.meta.maxSamConceptsPerImage)) jobs.push({ p, size, concept });
     }
+    await ctx.log('segment', `Asking SAM 3.1 for ${jobs.length} object types across ${targets.length} photo(s)…`);
+    await mkdir(join(config.dataDir, 'masks'), { recursive: true });
+    await pool(jobs, 6, async ({ p, size, concept }) => {
+      try {
+        const res = await segmentConcept({ budget, mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType), imageSize: size, concept });
+        detections.push(...res.detections);
+        for (const m of res.masks) await writeFile(join(config.dataDir, 'masks', `${m.detectionId}.svg`), m.svg);
+      } catch (e) {
+        await ctx.log('segment', `SAM "${concept}" on ${p.media.id} failed: ${(e as Error).message}`, 'warn');
+      }
+    });
     const kinds = new Set(detections.map((d) => d.concept));
     await ctx.log('segment', `SAM 3.1 returned ${detections.length} detections across ${kinds.size} categories (${[...kinds].join(', ') || 'none'})`);
   } else {
@@ -291,7 +303,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     let done = 0;
     if (rooms.length) await ctx.log('place', `Asking Muse where the furniture goes in ${rooms.length} photographed room(s)…`);
     await pool(rooms, 3, async (room) => {
-      const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 6);
+      const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 3);
       try {
         const c = await suggestPlacements({
           budget,

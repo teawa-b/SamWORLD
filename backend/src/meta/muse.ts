@@ -26,7 +26,7 @@ export const PROMPT_VERSIONS = {
   placement: 'placement-v1',
   planReview: 'plan-review-v1',
   surfaces: 'surfaces-v1',
-  layoutFromPhotos: 'layout-from-photos-v1',
+  layoutFromPhotos: 'layout-from-photos-v2',
   furnish: 'furnish-v1',
 };
 
@@ -122,6 +122,7 @@ export async function parseFloorplanLevel(opts: {
     images: [opts.imageDataUrl],
     schemaName: 'floorplan_level',
     schema: floorplanSchema,
+    effort: 'medium',
   });
   const pre = (id: string) => `${opts.levelId}-${id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const level: PlanLevel = {
@@ -175,14 +176,14 @@ const layoutSchema = obj({
   floors: { type: 'integer' },
   rooms: {
     type: 'array',
-    items: obj({ label: str, type: { type: 'string', enum: RoomType.options }, areaM2: num, level: { type: 'integer' }, photoIndexes: { type: 'array', items: { type: 'integer' } } }),
+    items: obj({ label: str, type: { type: 'string', enum: RoomType.options }, areaM2: num, level: { type: 'integer' }, side: { type: 'string', enum: ['front', 'rear', 'unknown'] }, photoIndexes: { type: 'array', items: { type: 'integer' } } }),
   },
   notes: { type: 'array', items: str },
 });
 
 export interface PhotoLayout {
   floorplanPhotoIndex: number | null;
-  rooms: { label: string; type: z.infer<typeof RoomType>; areaM2: number; level: number; photoIndexes: number[] }[];
+  rooms: { label: string; type: z.infer<typeof RoomType>; areaM2: number; level: number; side: 'front' | 'rear' | 'unknown'; photoIndexes: number[] }[];
   notes: string[];
   provenance: Provenance;
 }
@@ -196,11 +197,12 @@ export async function layoutFromPhotos(opts: {
   const { data, model } = await museJson<Omit<PhotoLayout, 'provenance'> & { floors: number }>({
     budget: opts.budget,
     system:
-      'You help reconstruct a home from a property listing that has no separate floor plan. First, if any photo IS a floor plan drawing, return its index as floorplanPhotoIndex. Otherwise return null and list every room you believe the home has: type, a short label, a realistic area in square metres, which floor (0 = ground/entry level), and the indexes of photos that show it. Use the listing facts (bedroom count, area) as ground truth for counts and total size. Include halls/landings only if visible. Do not invent extra rooms beyond what the facts and photos support.',
+      'You help reconstruct a home from a property listing that has no separate floor plan. First, if any photo IS a floor plan drawing, return its index as floorplanPhotoIndex. Otherwise return null and list every room you believe the home has: type, a short label, a realistic area in square metres, which floor (0 = ground/entry level), whether it is at the front (street side) or rear (garden side) of the home when the description, label or view tells you (else "unknown"), and the indexes of photos that show it. Use the listing facts (bedroom count, area) as ground truth for counts and total size. Include halls/landings only if visible. Do not invent extra rooms beyond what the facts and photos support.',
     text: `Listing: ${f.address}. Facts: ${f.bedrooms ?? '?'} bedrooms, ${f.bathrooms ?? '?'} bathrooms, ${f.areaSqM ? `${f.areaSqM} m²` : 'area unknown'}, type: ${f.propertyType ?? 'unknown'}.\nDescription: ${(f.description ?? '').slice(0, 1200)}\n${opts.photos.length} photos follow, numbered from 0.`,
     images: opts.photos,
     schemaName: 'layout_from_photos',
     schema: layoutSchema,
+    effort: 'medium',
   });
   const n = opts.photos.length;
   return {
@@ -245,7 +247,7 @@ export async function matchPhotosToRooms(opts: {
   const { data, model } = await museJson<{ photos: { photoIndex: number; roomId: string | null; confidence: number; evidence: string[]; visibleObjects: string[] }[] }>({
     budget: opts.budget,
     system:
-      'You match listing photos to rooms of a floor plan. Use room type, windows, doors, fixtures and visible connections. If a photo fits no room (exterior, street, unclear), return roomId null. Never claim a room was photographed without visual evidence. visibleObjects: short singular noun phrases for movable furniture and appliances you can see (e.g. "sofa", "bed", "dining table").',
+      'You match listing photos to rooms of a floor plan. Use room type, windows, doors, fixtures and visible connections. If a photo fits no room (exterior, street, unclear), return roomId null. Never claim a room was photographed without visual evidence. visibleObjects: every piece of furniture and every appliance you can see, as short singular noun phrases (e.g. "sofa", "bed", "chest of drawers", "oven", "washing machine", "basin", "fireplace").',
     text: `The first ${opts.planImages.length} image(s) are the floor plans. The next ${opts.photos.length} image(s) are listing photos, numbered from 0.\nRooms:\n${roomList}\nReturn one entry per photo.`,
     images: [...opts.planImages, ...opts.photos.map((p) => p.dataUrl)],
     schemaName: 'photo_room_matches',
@@ -312,7 +314,7 @@ export async function suggestPlacements(opts: {
   photos: { mediaId: string; dataUrl: string }[];
   detections: Detection[];
 }): Promise<PlacementCandidate[]> {
-  const dets = opts.detections.map((d) => `${d.id}: "${d.concept}" in photo ${opts.photos.findIndex((p) => p.mediaId === d.mediaId)} box ${d.box.map((v) => v.toFixed(2)).join(',')} score ${d.score.toFixed(2)}`);
+  const dets = opts.detections.map((d) => `${d.id}: "${d.concept}" in photo ${opts.photos.findIndex((p) => p.mediaId === d.mediaId)} box ${d.box.map((v) => v.toFixed(2)).join(',')} ${d.score != null ? `score ${d.score.toFixed(2)}` : ''}`);
   const { data, model } = await museJson<{
     objects: { kind: string; anchorType: 'against-wall' | 'centre' | 'corner'; side: WallSide | null; secondSide: WallSide | null; along: number; widthM: number; heightM: number; depthM: number; detectionIds: string[]; confidence: number; rationale: string }[];
   }>({
