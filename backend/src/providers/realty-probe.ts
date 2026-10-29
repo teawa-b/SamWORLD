@@ -63,15 +63,27 @@ export async function sampleRealty(log: Log) {
     ['zoopla', '/search/bycoordinates?latitude=51.5074&longitude=-0.1278&radius=1&searchType=To_Rent', (f) => [`/details/byid?listingId=${f?.listingId ?? f?.id ?? ''}`, `/images?listingId=${f?.listingId ?? f?.id ?? ''}`]],
     ['zillow', '/search/bycoordinates?latitude=40.7128&longitude=-74.0060&radius=1&listingStatus=For_Rent', (f) => [`/byzpid?zpid=${f?.zpid ?? f?.property?.zpid ?? ''}`, `/propimages?byzpid=${f?.zpid ?? f?.property?.zpid ?? ''}`]],
     ['realtor', '/search/bycoordinates?latitude=40.7128&longitude=-74.0060&radius=1&searchType=For_Rent&resultCount=5', (f) => [`/details/byid?property_id=${f?.property_id ?? f?.propertyId ?? ''}${f?.listing_id ? `&listing_id=${f.listing_id}` : ''}`]],
+    ['rightmove', '/search/bycoordinates?latitude=51.5074&longitude=-0.1278&radius=1&searchType=RENT&resultCount=5', (f) => [`/details/byid?propertyId=${f?.id ?? f?.propertyId ?? ''}`]],
   ];
+  const only = process.env.REALTYAPI_PROBE_PROVIDERS?.split(',');
+  if (only) samples.splice(0, samples.length, ...samples.filter(([p]) => only.includes(p)));
   for (const [p, search, next] of samples) {
     const res: any = await getJson(`https://${p}.realtyapi.io${search}`);
     log(`[realty-sample] ${p} search shape`, keysOf(res));
+    if (p === 'rightmove') {
+      // Values (not just types) of the fields that matter for parsing; listing data is public.
+      const r = Object.values(res ?? {}).find((v) => Array.isArray(v))?.[0] as any;
+      log(`[realty-sample] rightmove first result`, JSON.stringify(r ?? null).slice(0, 2500));
+    }
     const list = Array.isArray(res) ? res : Object.values(res ?? {}).find((v) => Array.isArray(v)) ?? res?.data?.results ?? res?.data?.home_search?.results ?? [];
     const first = (list as any[])[0];
     for (const path of next(first)) {
       const d = await getJson(`https://${p}.realtyapi.io${path}`);
       log(`[realty-sample] ${p} ${path.split('?')[0]} shape`, keysOf(d));
+      if (p === 'rightmove') {
+        log(`[realty-sample] rightmove detail`, JSON.stringify(d ?? null).slice(0, 6000));
+        log(`[realty-sample] rightmove floorplans`, JSON.stringify(findKey(d, /^floor_?plans?$/i) ?? null).slice(0, 1500));
+      }
     }
   }
   log('[realty-sample] done');
