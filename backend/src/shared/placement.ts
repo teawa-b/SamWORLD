@@ -19,6 +19,36 @@ const SIDE_NORMALS: Record<WallSide, Vec2> = {
 const DOOR_CLEARANCE_M = 0.8;
 const WALL_GAP_M = 0.03;
 
+/**
+ * How an object relates to the floor and to other objects. Only objects whose height ranges overlap can collide,
+ * so a mirror hangs above a basin and a lamp stands on a bedside table.
+ * - wall: hung on the wall, above whatever stands below it
+ * - surface: stands on a table or counter when it overlaps one, else on the floor (a floor lamp)
+ * - built-in: part of a kitchen run (oven, sink, hob…); may share space with the units
+ */
+type Mount = 'floor' | 'wall' | 'surface' | 'built-in';
+const WALL_MOUNTED = new Set(['mirror', 'picture', 'painting', 'artwork', 'frame', 'clock', 'wall-cabinet', 'bathroom-cabinet', 'towel-rail', 'wall-light']);
+const ON_SURFACES = new Set(['lamp', 'table-lamp', 'kettle', 'toaster', 'microwave', 'coffee-machine', 'vase', 'speaker', 'radio', 'books', 'fruit-bowl']);
+const BUILT_IN = new Set(['oven', 'cooker', 'hob', 'stove', 'sink', 'dishwasher', 'washing-machine', 'extractor-hood']);
+/** Built-ins set into the worktop rather than the front of the run. */
+const IN_WORKTOP = new Set(['sink', 'hob']);
+const SURFACES = new Set(['table', 'side-table', 'bedside-table', 'nightstand', 'desk', 'dresser', 'chest-of-drawers', 'sideboard', 'console-table', 'tv-unit', 'coffee-table', 'dining-table', 'cabinet', 'kitchen-units', 'counter', 'island', 'shelf', 'bookcase']);
+const KITCHEN_RUN = new Set(['kitchen-units', 'counter', 'island']);
+/** Kinds Muse uses for kitchen units; in a kitchen they're drawn as units with a worktop. */
+const KITCHEN_CABINETS = new Set(['cabinet', 'cupboard', 'counter', 'worktop', 'kitchen-cabinet', 'kitchen-units']);
+
+const mountOf = (kind: string): Mount => (WALL_MOUNTED.has(kind) ? 'wall' : ON_SURFACES.has(kind) ? 'surface' : BUILT_IN.has(kind) ? 'built-in' : 'floor');
+
+interface Placed {
+  id: string;
+  kind: string;
+  fp: Vec2[];
+  /** Bottom and top above the floor, metres. */
+  y0: number;
+  y1: number;
+  depth: number;
+}
+
 export interface PlacementResult {
   objects: SceneObject[];
   rejected: { candidate: PlacementCandidate; reasons: string[] }[];
@@ -89,21 +119,29 @@ function rotationFacing(inward: Vec2): number {
   return Math.atan2(inward[0], inward[1]);
 }
 
-function doorZones(structure: Structure, levelId: string): Vec2[][] {
+/**
+ * Space to keep clear in front of each door or archway of one room, on that room's side of the wall only:
+ * a door into the hall must not stop a bath going against the other side of the same wall.
+ */
+function doorZones(structure: Structure, room: { id: string; levelId: string; polygonXZMeters: Vec2[] }): Vec2[][] {
   const zones: Vec2[][] = [];
   for (const o of structure.openings) {
-    if (o.levelId !== levelId || (o.type !== 'door' && o.type !== 'archway')) continue;
+    if (o.levelId !== room.levelId || (o.type !== 'door' && o.type !== 'archway')) continue;
+    if (o.roomIds.length && !o.roomIds.includes(room.id)) continue;
     const wall = structure.walls.find((w) => w.id === o.parentWallId);
     if (!wall) continue;
     const len = segLength(wall.a, wall.b);
     const dir: Vec2 = [(wall.b[0] - wall.a[0]) / len, (wall.b[1] - wall.a[1]) / len];
-    const nrm: Vec2 = [-dir[1], dir[0]];
     const c: Vec2 = [wall.a[0] + dir[0] * o.offsetAlongWall, wall.a[1] + dir[1] * o.offsetAlongWall];
     const hw = o.widthM / 2 + 0.1;
     const d = DOOR_CLEARANCE_M;
+    let nrm: Vec2 = [-dir[1], dir[0]];
+    const probe = (n: Vec2): Vec2 => [c[0] + n[0] * 0.2, c[1] + n[1] * 0.2];
+    if (!pointInPolygon(probe(nrm), room.polygonXZMeters)) nrm = [-nrm[0], -nrm[1]];
+    if (!pointInPolygon(probe(nrm), room.polygonXZMeters)) continue; // the door isn't on this room's walls
     zones.push([
-      [c[0] - dir[0] * hw - nrm[0] * d, c[1] - dir[1] * hw - nrm[1] * d],
-      [c[0] + dir[0] * hw - nrm[0] * d, c[1] + dir[1] * hw - nrm[1] * d],
+      [c[0] - dir[0] * hw, c[1] - dir[1] * hw],
+      [c[0] + dir[0] * hw, c[1] + dir[1] * hw],
       [c[0] + dir[0] * hw + nrm[0] * d, c[1] + dir[1] * hw + nrm[1] * d],
       [c[0] - dir[0] * hw + nrm[0] * d, c[1] - dir[1] * hw + nrm[1] * d],
     ]);
@@ -111,11 +149,44 @@ function doorZones(structure: Structure, levelId: string): Vec2[][] {
   return zones;
 }
 
+/** Objects share space when their height ranges don't meet, or when a built-in sits in a kitchen run. */
+function canShare(a: { kind: string; y0: number; y1: number }, b: { kind: string; y0: number; y1: number }): boolean {
+  if (Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) <= 0.02) return true;
+  const builtIn = (x: string) => BUILT_IN.has(x);
+  return (builtIn(a.kind) && KITCHEN_RUN.has(b.kind)) || (builtIn(b.kind) && KITCHEN_RUN.has(a.kind));
+}
+
+/**
+ * Where an object sits vertically at a candidate footprint: on the floor, hung on the wall above what stands
+ * below, on a surface it overlaps, or in a kitchen run.
+ */
+function verticalFit(kind: string, h: number, fp: Vec2[], placed: Placed[], ceilingM: number): { y0: number; h: number; run: Placed | null } {
+  const mount = mountOf(kind);
+  const under = placed.filter((p) => polygonOverlapArea(fp, p.fp, 0.05) > 0.01);
+  if (mount === 'wall') {
+    const below = Math.max(0, ...under.filter((p) => mountOf(p.kind) !== 'wall').map((p) => p.y1));
+    const y0 = Math.min(Math.max(kind === 'mirror' ? 1.05 : 1.2, below + 0.1), ceilingM - h - 0.05);
+    return { y0: Math.max(0, y0), h, run: null };
+  }
+  if (mount === 'surface') {
+    const c: Vec2 = [fp.reduce((s, p) => s + p[0], 0) / fp.length, fp.reduce((s, p) => s + p[1], 0) / fp.length];
+    const support = under.filter((p) => SURFACES.has(p.kind) && pointInPolygon(c, p.fp)).sort((a, b) => b.y1 - a.y1)[0];
+    return { y0: support ? support.y1 : 0, h, run: null };
+  }
+  if (mount === 'built-in') {
+    const run = under.find((p) => KITCHEN_RUN.has(p.kind)) ?? null;
+    if (run && IN_WORKTOP.has(kind)) return { y0: run.y1 - 0.03, h: 0.06, run }; // set into the worktop
+    if (run) return { y0: 0, h: Math.min(h, run.y1 - 0.04), run }; // under the worktop
+  }
+  return { y0: 0, h, run: null };
+}
+
 export function validateFootprint(
   fp: Vec2[],
   roomPoly: Vec2[],
   doors: Vec2[][],
-  placed: { id: string; fp: Vec2[] }[],
+  placed: { id: string; fp: Vec2[]; kind?: string; y0?: number; y1?: number }[],
+  self?: { kind: string; y0: number; y1: number },
 ): string[] {
   const reasons: string[] = [];
   // Containment: every corner inside (allowing ~1 cm numeric slack).
@@ -130,6 +201,7 @@ export function validateFootprint(
   }
   if (doors.some((z) => polygonOverlapArea(fp, z, 0.05) > 0.02)) reasons.push('blocks a doorway');
   for (const other of placed) {
+    if (self && other.kind != null && other.y0 != null && other.y1 != null && canShare(self, { kind: other.kind, y0: other.y0, y1: other.y1 })) continue;
     if (polygonOverlapArea(fp, other.fp, 0.05) > 0.03) reasons.push(`overlaps ${other.id}`);
   }
   return reasons;
@@ -142,22 +214,30 @@ export function placeObjects(
 ): PlacementResult {
   const objects: SceneObject[] = [];
   const rejected: PlacementResult['rejected'] = [];
-  const placedByRoom = new Map<string, { id: string; fp: Vec2[] }[]>();
+  const placedByRoom = new Map<string, Placed[]>();
+  const roomOf = new Map(structure.rooms.map((r) => [r.id, r]));
+  /** In a kitchen, Muse's "cabinet" is a unit with a worktop, or a wall cupboard when it's shallow. */
+  const kindFor = (cand: PlacementCandidate) => {
+    if (roomOf.get(cand.roomId)?.type !== 'kitchen' || !KITCHEN_CABINETS.has(cand.kind)) return cand.kind;
+    return cand.sizeM[2] <= 0.4 && cand.sizeM[1] <= 0.95 ? 'wall-cabinet' : 'kitchen-units';
+  };
 
-  // Larger objects first: they have fewer valid positions.
-  const ordered = [...candidates].sort((a, b) => b.sizeM[0] * b.sizeM[2] - a.sizeM[0] * a.sizeM[2]);
+  // Floor-standing objects before what goes on or above them, larger first: they have fewer valid positions.
+  const stage = (c: PlacementCandidate) => ({ floor: 0, 'built-in': 1, surface: 2, wall: 3 })[mountOf(kindFor(c))];
+  const ordered = [...candidates].sort((a, b) => stage(a) - stage(b) || b.sizeM[0] * b.sizeM[2] - a.sizeM[0] * a.sizeM[2]);
 
   for (const cand of ordered) {
-    const room = structure.rooms.find((r) => r.id === cand.roomId);
+    const room = roomOf.get(cand.roomId);
     if (!room) {
       rejected.push({ candidate: cand, reasons: [`unknown room ${cand.roomId}`] });
       continue;
     }
     const level = structure.levels.find((l) => l.id === room.levelId)!;
-    const doors = doorZones(structure, room.levelId);
+    const doors = doorZones(structure, room);
     const placed = placedByRoom.get(room.id) ?? [];
+    const kind = kindFor(cand);
     const [w, h, d] = cand.sizeM;
-    const notes: string[] = [];
+    const notes: string[] = kind !== cand.kind ? [`${cand.kind} drawn as ${kind.replace('-', ' ')}`] : [];
 
     const attempts: { c: Vec2; rot: number; note: string }[] = [];
     if (cand.anchor.type === 'centre') {
@@ -195,13 +275,14 @@ export function placeObjects(
       }
     }
 
-    let success: { c: Vec2; rot: number; fp: Vec2[]; note: string } | null = null;
+    let success: { c: Vec2; rot: number; fp: Vec2[]; note: string; y0: number; h: number; run: Placed | null } | null = null;
     const lastReasons = new Set<string>();
     for (const at of attempts) {
       const fp = footprint(at.c, w, d, at.rot);
-      const reasons = validateFootprint(fp, room.polygonXZMeters, doors, placed);
+      const v = verticalFit(kind, h, fp, placed, level.heightMeters);
+      const reasons = validateFootprint(fp, room.polygonXZMeters, doors, placed, { kind, y0: v.y0, y1: v.y0 + v.h });
       if (!reasons.length) {
-        success = { ...at, fp };
+        success = { ...at, fp, ...v };
         break;
       }
       reasons.forEach((r) => lastReasons.add(r));
@@ -213,7 +294,23 @@ export function placeObjects(
     }
     notes.push(success.note);
     if (attempts[0] && success.note !== attempts[0].note) notes.push('moved from AI-suggested position to satisfy constraints');
-    placed.push({ id: cand.id, fp: success.fp });
+
+    let { c, fp } = success;
+    let depth = d;
+    const mount = mountOf(kind);
+    if (success.run && !IN_WORKTOP.has(kind)) {
+      // An oven or dishwasher in a run: as deep as the units plus 2 cm, so its front shows.
+      const runDepth = success.run.depth;
+      const front: Vec2 = [Math.sin(success.rot), Math.cos(success.rot)];
+      const shift = (runDepth + 0.02 - d) / 2;
+      depth = runDepth + 0.02;
+      c = [c[0] + front[0] * shift, c[1] + front[1] * shift];
+      fp = footprint(c, w, depth, success.rot);
+      notes.push('fitted into the kitchen units');
+    } else if (success.run) notes.push('set into the worktop');
+    else if (mount === 'surface' && success.y0 > 0) notes.push(`standing on a surface ${success.y0.toFixed(2)} m up`);
+    else if (mount === 'wall') notes.push(`hung ${success.y0.toFixed(2)} m above the floor`);
+    placed.push({ id: cand.id, kind, fp, y0: success.y0, y1: success.y0 + success.h, depth });
     placedByRoom.set(room.id, placed);
 
     const slid = success.note.includes('slid') || success.note.includes('nudged');
@@ -221,16 +318,16 @@ export function placeObjects(
       id: cand.id,
       roomId: room.id,
       levelId: room.levelId,
-      kind: cand.kind,
+      kind,
       modelUrl: null,
       sourceMediaIds: cand.sourceMediaIds,
-      positionXYZ: [round(success.c[0]), round(level.elevationMeters + h / 2), round(success.c[1])],
+      positionXYZ: [round(c[0]), round(level.elevationMeters + success.y0 + success.h / 2), round(c[1])],
       rotationY: round(success.rot, 1e-4),
-      sizeM: cand.sizeM,
+      sizeM: [w, round(success.h), round(depth)],
       reconstructionMethod: 'primitive',
       placementConfidence: round(cand.confidence * (slid ? 0.8 : 1) * room.confidence, 1e-3),
       dimensionsEstimated: true,
-      isMovable: !['kitchen-units', 'bathtub', 'toilet', 'basin', 'shower'].includes(cand.kind),
+      isMovable: !['kitchen-units', 'wall-cabinet', 'bathtub', 'toilet', 'basin', 'shower', ...BUILT_IN].includes(kind),
       placementNotes: [...notes, cand.rationale],
       provenance: { ...placementProvenance, note: `suggested by ${cand.provenance.method}; placed deterministically` },
     });

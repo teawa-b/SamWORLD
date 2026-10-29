@@ -480,7 +480,8 @@ function applySceneCorrections(objects: SceneObject[], structure: Structure, pro
     if (c.positionXZ) [next.positionXYZ[0], next.positionXYZ[2]] = c.positionXZ;
     if (c.rotationY != null) next.rotationY = c.rotationY;
     const room = structure.rooms.find((r) => r.id === o.roomId)!;
-    const issues = validateFootprint(objectFootprint(next), room.polygonXZMeters, [], out.filter((p) => p.roomId === o.roomId).map((p) => ({ id: p.id, fp: objectFootprint(p) })));
+    const span = (p: SceneObject) => ({ kind: p.kind, y0: p.positionXYZ[1] - p.sizeM[1] / 2, y1: p.positionXYZ[1] + p.sizeM[1] / 2 });
+    const issues = validateFootprint(objectFootprint(next), room.polygonXZMeters, [], out.filter((p) => p.roomId === o.roomId).map((p) => ({ id: p.id, fp: objectFootprint(p), ...span(p) })), span(next));
     next.placementNotes.push(`Adjusted by admin${issues.length ? ` (warning: ${issues.join(', ')})` : ''}`);
     next.provenance = { method: 'admin-correction', at: now() };
     out.push(next);

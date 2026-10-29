@@ -108,6 +108,88 @@ describe('placement conventions', () => {
   });
 });
 
+describe('fittings (shaped like the Craven Street flat)', () => {
+  // Hall on the west; kitchen above the bathroom on the east. The kitchen door is marked near the corner where
+  // the hall, kitchen and bathroom meet, closer to the kitchen/bathroom wall than to the hall.
+  const room = (id: string, type: 'kitchen' | 'bathroom' | 'hall', poly: [number, number][]) =>
+    ({ id, label: id, type, polygonPx: poly.map(([x, z]) => [x * 100, z * 100] as [number, number]), measured: null, confidence: 1 });
+  const structure = buildStructure(
+    {
+      layoutSource: 'floorplan',
+      levels: [
+        {
+          id: 'L', index: 0, name: 'G', planMediaId: 'm', ceilingHeightMeters: 2.4,
+          rooms: [
+            room('hall', 'hall', [[-1.2, 0], [0, 0], [0, 6.3], [-1.2, 6.3]]),
+            room('kitchen', 'kitchen', [[0, 0], [2, 0], [2, 3.8], [0, 3.8]]),
+            room('bath', 'bathroom', [[0, 3.8], [2, 3.8], [2, 6.3], [0, 6.3]]),
+          ],
+          openings: [
+            { id: 'd-kitchen', type: 'door', atPx: [15, 378], widthPx: 76, roomIds: ['kitchen', 'hall'], confidence: 1 },
+            { id: 'd-bath', type: 'door', atPx: [0, 560], widthPx: 76, roomIds: ['bath', 'hall'], confidence: 1 },
+          ],
+          stairs: [],
+        },
+      ],
+      statedTotalAreaSqM: null,
+      uncertainties: [],
+      provenance: prov,
+    },
+    { propertyId: 'p' },
+  );
+  const wallOf = (id: string) => structure.walls.find((w) => w.id === structure.openings.find((o) => o.id === id)!.parentWallId)!;
+  const mk = (id: string, roomId: string, kind: string, side: 'north' | 'south' | 'east' | 'west', along: number, sizeM: [number, number, number]) =>
+    ({ id, roomId, kind, anchor: { type: 'against-wall' as const, side, along }, sizeM, sourceDetectionIds: [], sourceMediaIds: [], confidence: 1, rationale: '', provenance: prov });
+
+  it('puts a door on a wall between the rooms it connects', () => {
+    expect([...wallOf('d-kitchen').roomIds].sort()).toEqual(['hall', 'kitchen']);
+  });
+
+  it('places the bath along the wall it shares with the kitchen', () => {
+    const { objects, rejected } = placeObjects(structure, [mk('tub', 'bath', 'bathtub', 'north', 0.5, [1.7, 0.55, 0.7])], prov);
+    expect(rejected).toEqual([]);
+    const northZ = Math.min(...structure.rooms.find((r) => r.id === 'bath')!.polygonXZMeters.map((p) => p[1]));
+    expect(objects[0].positionXYZ[2]).toBeCloseTo(northZ + 0.03 + 0.35, 2); // against the wall, not moved off it
+  });
+
+  it('fits an oven and sink into the kitchen units and hangs wall cupboards above them', () => {
+    const { objects, rejected } = placeObjects(
+      structure,
+      [
+        mk('units', 'kitchen', 'cabinet', 'east', 0.5, [3.0, 0.9, 0.6]),
+        mk('oven', 'kitchen', 'oven', 'east', 0.3, [0.6, 0.85, 0.55]),
+        mk('sink', 'kitchen', 'sink', 'east', 0.7, [0.8, 0.2, 0.5]),
+        mk('upper', 'kitchen', 'cabinet', 'east', 0.5, [1.6, 0.7, 0.35]),
+      ],
+      prov,
+    );
+    expect(rejected).toEqual([]);
+    const by = Object.fromEntries(objects.map((o) => [o.id, o]));
+    expect(by.units.kind).toBe('kitchen-units');
+    expect(by.upper.kind).toBe('wall-cabinet');
+    expect(by.upper.positionXYZ[1] - by.upper.sizeM[1] / 2).toBeGreaterThan(0.9); // above the worktop
+    expect(by.oven.sizeM[2]).toBeCloseTo(0.62, 2); // front 2 cm proud of the units
+    expect(by.sink.positionXYZ[1]).toBeCloseTo(0.9, 1); // in the worktop
+  });
+
+  it('hangs a mirror above the basin and stands a lamp on the bedside table', () => {
+    const { objects, rejected } = placeObjects(
+      structure,
+      [
+        mk('basin', 'bath', 'basin', 'east', 0.5, [0.55, 0.85, 0.45]),
+        mk('mirror', 'bath', 'mirror', 'east', 0.5, [0.5, 0.7, 0.04]),
+        mk('table', 'bath', 'bedside-table', 'south', 0.8, [0.45, 0.55, 0.4]),
+        mk('lamp', 'bath', 'lamp', 'south', 0.8, [0.2, 0.4, 0.2]),
+      ],
+      prov,
+    );
+    expect(rejected).toEqual([]);
+    const by = Object.fromEntries(objects.map((o) => [o.id, o]));
+    expect(by.mirror.positionXYZ[1] - 0.35).toBeGreaterThanOrEqual(0.95);
+    expect(by.lamp.positionXYZ[1] - 0.2).toBeCloseTo(0.55, 2);
+  });
+});
+
 describe('viewpoints', () => {
   const structure = buildStructure(interp, { propertyId: 'p' });
   const vps = computeViewpoints(structure);

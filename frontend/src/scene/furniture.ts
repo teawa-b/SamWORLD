@@ -80,8 +80,30 @@ const BUILDERS: Record<string, Builder> = {
   'kitchen-units': (g, w, h, d) => {
     box(g, M.white, w, h - 0.04, d, 0, 0, 0);
     box(g, M.counter, w + 0.02, 0.04, d + 0.02, 0, h - 0.04, 0);
-    box(g, M.white, w, 0.7, 0.35, 0, 1.45, -d / 2 + 0.175);
   },
+  // Placed by the engine at its own height (wall cupboards above the worktop, sinks and hobs in it).
+  'wall-cabinet': (g, w, h, d) => box(g, M.white, w, h, d, 0, 0, 0),
+  oven: (g, w, h, d) => {
+    box(g, M.steel, w, h, d, 0, 0, 0);
+    box(g, M.dark, w * 0.8, h * 0.55, 0.01, 0, h * 0.2, d / 2 + 0.005);
+  },
+  dishwasher: (g, w, h, d) => box(g, M.steel, w, h, d, 0, 0, 0),
+  sink: (g, w, h, d) => box(g, M.steel, w * 0.9, h, d * 0.8, 0, 0, 0),
+  hob: (g, w, h, d) => {
+    box(g, M.dark, w * 0.95, Math.min(h, 0.04), d * 0.85, 0, 0, 0);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) cyl(g, M.steel, Math.min(w, d) * 0.12, 0.045, sx * w * 0.22, 0, sz * d * 0.2);
+  },
+  mirror: (g, w, h, d) => {
+    box(g, M.white, w, h, Math.max(d, 0.02), 0, 0, 0);
+    box(g, M.steel, w * 0.92, h * 0.92, 0.005, 0, h * 0.04, Math.max(d, 0.02) / 2);
+  },
+  lamp: (g, w, h) => {
+    cyl(g, M.dark, Math.min(w, 0.06) / 2, h * 0.6, 0, 0, 0);
+    cyl(g, M.fabricLight, Math.max(w, 0.15) / 2, h * 0.4, 0, h * 0.6, 0);
+  },
+  'table-lamp': (g, w, h, d) => BUILDERS.lamp(g, w, h, d),
+  cooker: (g, w, h, d) => BUILDERS.oven(g, w, h, d),
+  stove: (g, w, h, d) => BUILDERS.oven(g, w, h, d),
   fridge: (g, w, h, d) => box(g, M.steel, w, h, d, 0, 0, 0),
   'washing-machine': (g, w, h, d) => {
     box(g, M.white, w, h, d, 0, 0, 0);

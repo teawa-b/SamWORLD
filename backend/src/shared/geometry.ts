@@ -442,15 +442,19 @@ export function buildStructure(interp: FloorplanInterpretation, opts: BuildOptio
       if (op.type === 'stairs') continue;
       const at = conv(op.atPx);
       const width = op.widthPx * mpp;
+      // Nearest wall, preferring one that borders the rooms the opening connects (a door marked near a corner
+      // must not land on a wall between two other rooms). An exterior opening wants an exterior wall of its room.
+      const fits = (w: Wall) => op.roomIds.length > 0 && op.roomIds.every((id) => w.roomIds.includes(id)) && (op.roomIds.length > 1 || w.exterior);
       let best: { wall: Wall; dist: number; t: number } | null = null;
       for (const w of lvlWalls) {
         const { dist, t } = distPointSegment(at, w.a, w.b);
-        if (!best || dist < best.dist) best = { wall: w, dist, t };
+        const score = dist + (fits(w) ? 0 : 0.5);
+        if (!best || score < best.dist + (fits(best.wall) ? 0 : 0.5)) best = { wall: w, dist, t };
       }
       const dims = OPENING_DIMENSIONS[op.type];
       let parentWallId: string | null = null;
       let offset = 0;
-      if (best && best.dist < 0.3) {
+      if (best && best.dist < (fits(best.wall) ? 0.6 : 0.3)) {
         const len = segLength(best.wall.a, best.wall.b);
         const fitWidth = Math.min(width, len - 0.05);
         offset = Math.max(fitWidth / 2, Math.min(len - fitWidth / 2, best.t * len));
