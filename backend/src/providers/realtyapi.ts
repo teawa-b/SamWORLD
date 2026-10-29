@@ -123,7 +123,7 @@ export async function searchNearby(provider: RealtyProvider, lat: number, lng: n
   const coords = { latitude: lat.toFixed(5), longitude: lng.toFixed(5), radius: String(radiusMiles) };
   const ttl = 6 * 3600e3;
   if (provider === 'rightmove') {
-    const d = await call<Json>('rightmove', '/search/bycoordinates', { ...coords, searchType: mode === 'rent' ? 'RENT' : 'BUY', resultCount: '40' }, ttl);
+    const d = await call<Json>('rightmove', '/search/bycoordinates', { ...coords, searchType: mode === 'rent' ? 'RENT' : 'BUY', resultCount: '40', sortOrder: 'newest' }, ttl); // default is most expensive first
     const seen = new Set<string>();
     return [...(d.searchResults ?? []), ...(d.featured ?? [])]
       .filter((r: Json) => r.id && r.latitude != null && !seen.has(String(r.id)) && seen.add(String(r.id)))
