@@ -3,7 +3,7 @@
  * independently of, any AI visual review.
  */
 import { polygonOverlapArea, polygonSelfIntersects, bounds } from './geometry.js';
-import { objectFootprint } from './placement.js';
+import { canShare, objectFootprint, objectSpan } from './placement.js';
 import type { CheckResult, FloorplanInterpretation, PlacementCandidate, SceneObject, Structure } from './schemas.js';
 
 export const MEASUREMENT_TOLERANCE_PCT = 5;
@@ -153,6 +153,7 @@ export function verifyGeometry(
   for (let i = 0; i < objects.length; i++) {
     for (let j = i + 1; j < objects.length; j++) {
       if (objects[i].roomId !== objects[j].roomId) continue;
+      if (canShare(objectSpan(objects[i]), objectSpan(objects[j]))) continue; // e.g. a mirror above a basin
       if (polygonOverlapArea(objectFootprint(objects[i]), objectFootprint(objects[j]), 0.05) > 0.03) {
         push(`collide-${objects[i].id}-${objects[j].id}`, 'warn', `${objects[i].kind} collides with ${objects[j].kind}`, [objects[i].id, objects[j].id]);
       }

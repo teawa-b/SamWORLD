@@ -16,6 +16,13 @@ const SIDE_NORMALS: Record<WallSide, Vec2> = {
   west: [-1, 0],
 };
 
+const FALLBACK_SIDES: Record<WallSide, WallSide[]> = {
+  north: ['east', 'west', 'south'],
+  south: ['west', 'east', 'north'],
+  east: ['north', 'south', 'west'],
+  west: ['south', 'north', 'east'],
+};
+
 const DOOR_CLEARANCE_M = 0.8;
 const WALL_GAP_M = 0.03;
 
@@ -150,7 +157,7 @@ function doorZones(structure: Structure, room: { id: string; levelId: string; po
 }
 
 /** Objects share space when their height ranges don't meet, or when a built-in sits in a kitchen run. */
-function canShare(a: { kind: string; y0: number; y1: number }, b: { kind: string; y0: number; y1: number }): boolean {
+export function canShare(a: { kind: string; y0: number; y1: number }, b: { kind: string; y0: number; y1: number }): boolean {
   if (Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) <= 0.02) return true;
   const builtIn = (x: string) => BUILT_IN.has(x);
   return (builtIn(a.kind) && KITCHEN_RUN.has(b.kind)) || (builtIn(b.kind) && KITCHEN_RUN.has(a.kind));
@@ -247,7 +254,10 @@ export function placeObjects(
       attempts.push({ c, rot, note: 'centre of room' });
       for (const dx of [-0.4, 0.4]) for (const dz of [-0.4, 0.4]) attempts.push({ c: [c[0] + dx, c[1] + dz], rot, note: 'nudged from centre' });
     } else {
-      const sides: WallSide[] = cand.anchor.type === 'against-wall' ? [cand.anchor.side] : [cand.anchor.sides[0]];
+      // The suggested wall first; if nothing fits there (Muse can misjudge the side from a photo), the
+      // neighbouring walls and then the opposite one, so a bath isn't lost because its wall was misread.
+      const asked: WallSide = cand.anchor.type === 'against-wall' ? cand.anchor.side : cand.anchor.sides[0];
+      const sides: WallSide[] = cand.anchor.type === 'against-wall' ? [asked, ...FALLBACK_SIDES[asked]] : [asked];
       let along = cand.anchor.type === 'against-wall' ? cand.anchor.along : 0.5;
       for (const side of sides) {
         const edges = edgesForSide(room.polygonXZMeters, side);
@@ -269,7 +279,8 @@ export function placeObjects(
               e.a[0] + dir[0] * s + e.inward[0] * (d / 2 + WALL_GAP_M),
               e.a[1] + dir[1] * s + e.inward[1] * (d / 2 + WALL_GAP_M),
             ];
-            attempts.push({ c, rot: rotationFacing(e.inward), note: `against ${side} wall${ei ? ` (segment ${ei + 1})` : ''}${off ? `, slid ${off > 0 ? '+' : ''}${off}` : ''}` });
+            const instead = side !== asked ? ` instead of the ${asked} wall` : '';
+            attempts.push({ c, rot: rotationFacing(e.inward), note: `against ${side} wall${ei ? ` (segment ${ei + 1})` : ''}${instead}${off ? `, slid ${off > 0 ? '+' : ''}${off}` : ''}` });
           }
         }
       }
@@ -313,7 +324,7 @@ export function placeObjects(
     placed.push({ id: cand.id, kind, fp, y0: success.y0, y1: success.y0 + success.h, depth });
     placedByRoom.set(room.id, placed);
 
-    const slid = success.note.includes('slid') || success.note.includes('nudged');
+    const slid = success.note.includes('slid') || success.note.includes('nudged') || success.note.includes('instead of');
     objects.push({
       id: cand.id,
       roomId: room.id,
@@ -341,5 +352,8 @@ const round = (v: number, step = 0.001) => Math.round(v / step) * step;
 export function objectFootprint(o: SceneObject): Vec2[] {
   return footprint([o.positionXYZ[0], o.positionXYZ[2]], o.sizeM[0], o.sizeM[2], o.rotationY);
 }
+
+/** Kind and height range of a placed object, for {@link canShare}. */
+export const objectSpan = (o: SceneObject) => ({ kind: o.kind, y0: o.positionXYZ[1] - o.sizeM[1] / 2, y1: o.positionXYZ[1] + o.sizeM[1] / 2 });
 
 export { bounds };

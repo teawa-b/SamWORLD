@@ -152,6 +152,14 @@ describe('fittings (shaped like the Craven Street flat)', () => {
     expect(objects[0].positionXYZ[2]).toBeCloseTo(northZ + 0.03 + 0.35, 2); // against the wall, not moved off it
   });
 
+  it('moves a bath to another wall when its own doorway blocks the suggested one', () => {
+    // Long enough that it can't slide past the doorway on the west wall (the test plan has no printed sizes, so
+    // it's built at the default 2 cm/px: the bathroom is 4 × 5 m).
+    const { objects, rejected } = placeObjects(structure, [mk('tub', 'bath', 'bathtub', 'west', 0.5, [4.5, 0.55, 0.7])], prov);
+    expect(rejected).toEqual([]);
+    expect(objects[0].placementNotes[0]).toMatch(/instead of the west wall/);
+  });
+
   it('fits an oven and sink into the kitchen units and hangs wall cupboards above them', () => {
     const { objects, rejected } = placeObjects(
       structure,
