@@ -20,7 +20,7 @@ MapLibre globe showing listings near you. **All AI is Meta models** (no other pr
 | Redesign concepts | Muse Image 1.0 (off unless `REDESIGN_ENABLED=true`) |
 | 3D objects (optional) | SAM 3D on the owner's Modal endpoint (`worker-3d/`, needs an approve switch in the UI — not built yet) |
 
-Listings: RealtyAPI — Zoopla for the UK, Zillow + Realtor.com for the US (`backend/src/providers/realtyapi.ts`, `docs/realtyapi.md`).
+Listings: RealtyAPI — Rightmove for the UK, Realtor.com for the US; the globe shows only homes with a floor plan (Zoopla and Zillow are import-only) (`backend/src/providers/realtyapi.ts`, `docs/realtyapi.md`).
 
 ## Layout of the repo
 

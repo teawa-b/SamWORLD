@@ -166,7 +166,7 @@ export class Panel {
           ? `<div class="near-head"><h3>${this.nearLoading ? 'Searching…' : `Near ${esc(this.nearPlace?.label || 'here')}`}</h3>
              <div class="segmented small">${(['rent', 'buy'] as const).map((m) => `<button data-action="mode" data-mode="${m}" class="${this.mode === m ? 'active' : ''}">${m === 'rent' ? 'To rent' : 'For sale'}</button>`).join('')}</div></div>
              <div id="nearby">${near}</div>`
-          : `<p class="xs faint" style="margin-top:8px">UK listings from Zoopla · US listings from Zillow and Realtor.com</p>`
+          : `<p class="xs faint" style="margin-top:8px">UK listings from Rightmove · US listings from Realtor.com · only homes with a floor plan</p>`
       }
       ${demo ? `<h3>Try the demo home</h3>${demo}` : ''}`;
   }
@@ -178,7 +178,7 @@ export class Panel {
         <div>
           <div class="title">${i + 1}. ${esc(l.address)}</div>
           <div class="meta">${[l.priceText, l.bedrooms != null ? `${l.bedrooms} bed` : '', l.bathrooms != null ? `${l.bathrooms} bath` : ''].filter(Boolean).map(esc).join(' · ')}</div>
-          <div class="src">${esc(l.providerLabel)}</div>
+          <div class="src">${esc(l.providerLabel)}${l.hasFloorPlan ? ` <span class="tag ok">Floor plan</span>` : ''}</div>
         </div>
       </button>`;
   }

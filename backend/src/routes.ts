@@ -10,7 +10,7 @@ import { capabilities, config, metaConfigured } from './config.js';
 import { AiBudget } from './meta/client.js';
 import { redesignRoom, REDESIGN_PROMPT_VERSION } from './meta/image.js';
 import { FIXTURE_PROVIDER, fixtureThumbnail, importFixture, resolveStorageKey, searchFixtures } from './providers/fixture.js';
-import { importRealty, isRealtyProvider, providersFor, realtyStatus, searchNearby, type NearbyListing } from './providers/realtyapi.js';
+import { importRealty, isRealtyProvider, providersFor, realtyStatus, searchNearby, type NearbyListing, type RealtyProvider } from './providers/realtyapi.js';
 import { geocode, reverseGeocode } from './providers/geo.js';
 import { store } from './store.js';
 import { MODEL_IMAGE_TYPES, toDataUrl } from './lib/image.js';
@@ -84,7 +84,7 @@ export async function registerRoutes(app: FastifyInstance) {
     return { place };
   });
 
-  // Listings near a point: Zoopla in the UK, Zillow + Realtor.com in the US.
+  // Listings near a point: Rightmove in the UK, Realtor.com in the US. Listings known to have no floor plan are left out.
   app.get('/api/listings/nearby', async (req) => {
     rateLimit(req, 20);
     const q = parse(
@@ -93,13 +93,17 @@ export async function registerRoutes(app: FastifyInstance) {
     );
     const place = await reverseGeocode(q.lat, q.lng).catch(() => ({ lat: q.lat, lng: q.lng, label: '', countryCode: '' }));
     const providers = providersFor(place.countryCode);
-    if (!providers.length) return { place, providers, listings: [], notice: 'Listings are available in the UK (Zoopla) and the US (Zillow, Realtor.com). Try somewhere there.' };
+    if (!providers.length) return { place, providers, listings: [], notice: 'Listings are available in the UK (Rightmove) and the US (Realtor.com). Try somewhere there.' };
     const status = realtyStatus();
     if (!status.available) return { place, providers, listings: [], notice: `Live listings unavailable: ${status.reason}` };
     const results = await Promise.allSettled(providers.map((p) => searchNearby(p, q.lat, q.lng, q.mode)));
     const listings: NearbyListing[] = [];
     const failures: string[] = [];
-    results.forEach((r, i) => (r.status === 'fulfilled' ? listings.push(...r.value) : failures.push(`${providers[i]}: ${(r.reason as Error).message}`)));
+    let withoutPlan = 0;
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') return failures.push(`${providers[i]}: ${(r.reason as Error).message}`);
+      for (const l of r.value) l.hasFloorPlan === false ? withoutPlan++ : listings.push(l);
+    });
     // Nearest first.
     const d = (l: NearbyListing) => (l.lat - q.lat) ** 2 + ((l.lng - q.lng) * Math.cos((q.lat * Math.PI) / 180)) ** 2;
     listings.sort((a, b) => d(a) - d(b));
@@ -108,7 +112,13 @@ export async function registerRoutes(app: FastifyInstance) {
       place,
       providers,
       listings: listings.slice(0, 40).map((l) => ({ ...l, importedPropertyId: imported.find((p) => p.sourceProvider === l.provider && p.sourceListingId === l.listingId)?.id ?? null })),
-      notice: failures.length ? `Some providers didn’t answer: ${failures.join('; ')}` : listings.length ? null : 'No listings found right here. Try a busier area or switch between rent and buy.',
+      notice: failures.length
+        ? `Some providers didn’t answer: ${failures.join('; ')}`
+        : listings.length
+          ? null
+          : withoutPlan
+            ? `${withoutPlan} listing${withoutPlan === 1 ? '' : 's'} here, but none with a floor plan. Try a busier area or switch between rent and buy.`
+            : 'No listings found right here. Try a busier area or switch between rent and buy.',
     };
   });
 
@@ -125,7 +135,7 @@ export async function registerRoutes(app: FastifyInstance) {
     if (!isFixture && !isRealtyProvider(body.provider)) throw new HttpError(400, 'PROVIDER_NOT_ALLOWED', 'Only allow-listed providers can be imported.');
     const existing = Object.values(store.all('properties')).find((p) => p.sourceProvider === body.provider && p.sourceListingId === body.listingId);
     const id = existing?.id ?? (isFixture ? `prop-${body.listingId}` : `prop-${body.provider}-${body.listingId.replace(/:/g, '-')}`);
-    const imported = isFixture ? importFixture(body.listingId, id, existing?.createdAt ?? now()) : await importRealty(body.provider as 'zoopla', body.listingId, id, existing?.createdAt ?? now());
+    const imported = isFixture ? importFixture(body.listingId, id, existing?.createdAt ?? now()) : await importRealty(body.provider as RealtyProvider, body.listingId, id, existing?.createdAt ?? now());
     if (!imported) throw new HttpError(404, 'NOT_FOUND', 'Listing not found');
     imported.property.updatedAt = now();
     await store.put('properties', id, imported.property);

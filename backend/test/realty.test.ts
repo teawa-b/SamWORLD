@@ -12,7 +12,7 @@ const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
 function mockFetch(routes: Record<string, unknown>) {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
     const u = new URL(String(input));
-    if (/zoocdn|zillowstatic|rdcpix/.test(u.hostname)) return new Response(png, { headers: { 'content-type': 'image/png' } });
+    if (/rightmove\.co\.uk|zoocdn|zillowstatic|rdcpix/.test(u.hostname)) return new Response(png, { headers: { 'content-type': 'image/png' } });
     const body = routes[`${u.hostname.split('.')[0]}${u.pathname}`];
     return body ? new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }) : new Response('nope', { status: 404 });
   }));
@@ -21,9 +21,30 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('RealtyAPI adapter', () => {
   it('routes countries to providers', () => {
-    expect(providersFor('gb')).toEqual(['zoopla']);
-    expect(providersFor('us')).toEqual(['zillow', 'realtor']);
+    expect(providersFor('gb')).toEqual(['rightmove']);
+    expect(providersFor('us')).toEqual(['realtor']);
     expect(providersFor('fr')).toEqual([]);
+  });
+
+  it('maps Rightmove search results with their floor-plan counts', async () => {
+    const r = (id: number, floorplanCount: number) => ({ id, address: 'Clarges Street, London, W1J', bedrooms: 2, price: 3000, displayPrice: '£3,000 pcm', floorplanCount, photos: ['https://media.rightmove.co.uk/dir/property-photo/a/1/x_max_656x437.jpeg'], latitude: 51.5, longitude: -0.14, url: `https://www.rightmove.co.uk/properties/${id}` });
+    mockFetch({ 'rightmove/search/bycoordinates': { searchResults: [r(1, 1), r(2, 0)], featured: [r(1, 1)] } });
+    const ls = await searchNearby('rightmove', 51.5, -0.14, 'rent');
+    expect(ls).toHaveLength(2); // the featured duplicate is dropped
+    expect(ls[0]).toMatchObject({ listingId: '1', priceText: '£3,000 pcm', bedrooms: 2, hasFloorPlan: true, url: 'https://www.rightmove.co.uk/properties/1' });
+    expect(ls[1].hasFloorPlan).toBe(false);
+  });
+
+  it('imports a Rightmove listing with its floor plan, full-size photos, price and area', async () => {
+    mockFetch({
+      'rightmove/details/byid': { detail: { id: 5, transactionType: 'RENT', bedrooms: 2, address: 'Clarges Street, London, W1J', postcode: 'W1J 8AS', fullDescription: 'Bright flat.<br />Two bedrooms.', price: { primary: '£3,000 pcm', numericValue: 3000 }, size: { primary: '700 sq ft', secondary: '65 sq m' }, propertyUrl: 'https://www.rightmove.co.uk/properties/5', photos: [{ url: 'https://media.rightmove.co.uk/p_max_656x437.jpeg', maxSizeUrl: 'https://media.rightmove.co.uk/p.jpeg' }], floorplans: [{ url: 'https://media.rightmove.co.uk/property-floorplan/fp.png', caption: 'Floor Plan' }], status: { available: true }, location: { latitude: 51.5, longitude: -0.14 } } },
+    });
+    const { property, media } = await importRealty('rightmove', '5', 'prop-rightmove-5', 'now');
+    expect(property).toMatchObject({ address: 'Clarges Street, London, W1J 8AS', bedrooms: 2, areaSqM: 65, status: 'to-rent', price: { amount: 3000, currency: 'GBP', period: 'pcm' } });
+    expect(media.map((m) => [m.type, m.sourceUrl])).toEqual([
+      ['floorplan', 'https://media.rightmove.co.uk/property-floorplan/fp.png'],
+      ['photo', 'https://media.rightmove.co.uk/p.jpeg'],
+    ]);
   });
 
   it('maps Zoopla search results', async () => {

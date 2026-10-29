@@ -1,6 +1,7 @@
 /**
- * RealtyAPI adapter (https://www.realtyapi.io): Zoopla for the UK, Zillow and
- * Realtor.com for the US. Endpoints and parameters come from each provider's
+ * RealtyAPI adapter (https://www.realtyapi.io): Rightmove for the UK (searched,
+ * because its results say whether a floor plan exists) and Zoopla (import only),
+ * Zillow and Realtor.com for the US. Endpoints and parameters come from each provider's
  * published OpenAPI spec; field names from sampled responses (see
  * docs/realtyapi.md). Parsing is defensive because responses vary by listing.
  *
@@ -15,16 +16,16 @@ import { config } from '../config.js';
 import { mimeFromName } from '../lib/image.js';
 import { ProviderUnavailableError } from './types.js';
 
-export type RealtyProvider = 'zoopla' | 'zillow' | 'realtor';
-export const REALTY_PROVIDERS: RealtyProvider[] = ['zoopla', 'zillow', 'realtor'];
+export type RealtyProvider = 'rightmove' | 'zoopla' | 'zillow' | 'realtor';
+export const REALTY_PROVIDERS: RealtyProvider[] = ['rightmove', 'zoopla', 'zillow', 'realtor'];
 export type ListingMode = 'rent' | 'buy';
 
-const PROVIDER_LABEL: Record<RealtyProvider, string> = { zoopla: 'Zoopla', zillow: 'Zillow', realtor: 'Realtor.com' };
+const PROVIDER_LABEL: Record<RealtyProvider, string> = { rightmove: 'Rightmove', zoopla: 'Zoopla', zillow: 'Zillow', realtor: 'Realtor.com' };
 
-/** Which providers cover a country (ISO alpha-2, lower case). */
+/** Which providers are searched for a country (ISO alpha-2, lower case). Zoopla listings stay importable. */
 export function providersFor(countryCode: string): RealtyProvider[] {
-  if (countryCode === 'gb') return ['zoopla'];
-  if (countryCode === 'us') return ['zillow', 'realtor'];
+  if (countryCode === 'gb') return ['rightmove'];
+  if (countryCode === 'us') return ['realtor']; // Zillow exposes no floor plans; its listings stay importable
   return [];
 }
 
@@ -40,14 +41,16 @@ export interface NearbyListing {
   bathrooms: number | null;
   photoUrl: string | null;
   url: string | null;
+  /** Whether the listing has a floor plan; null when the provider's search doesn't say. */
+  hasFloorPlan: boolean | null;
 }
 
 // Image hosts we will download listing media from (SSRF guard).
-const MEDIA_HOSTS = [/\.zoocdn\.com$/, /^photos\.zillowstatic\.com$/, /\.rdcpix\.com$/];
+const MEDIA_HOSTS = [/^media\.rightmove\.co\.uk$/, /\.zoocdn\.com$/, /^photos\.zillowstatic\.com$/, /\.rdcpix\.com$/];
 
 export function realtyStatus(): { available: boolean; reason: string } {
   if (!config.realty.apiKey) return { available: false, reason: 'REALTYAPI_KEY is not set.' };
-  return { available: true, reason: 'Zoopla (UK), Zillow and Realtor.com (US)' };
+  return { available: true, reason: 'Rightmove (UK), Zillow and Realtor.com (US)' };
 }
 
 const cache = new Map<string, { at: number; value: unknown }>();
@@ -119,6 +122,26 @@ const money = (amount: number | null, currency: string, suffix = '') =>
 export async function searchNearby(provider: RealtyProvider, lat: number, lng: number, mode: ListingMode, radiusMiles = 1): Promise<NearbyListing[]> {
   const coords = { latitude: lat.toFixed(5), longitude: lng.toFixed(5), radius: String(radiusMiles) };
   const ttl = 6 * 3600e3;
+  if (provider === 'rightmove') {
+    const d = await call<Json>('rightmove', '/search/bycoordinates', { ...coords, searchType: mode === 'rent' ? 'RENT' : 'BUY', resultCount: '40' }, ttl);
+    const seen = new Set<string>();
+    return [...(d.searchResults ?? []), ...(d.featured ?? [])]
+      .filter((r: Json) => r.id && r.latitude != null && !seen.has(String(r.id)) && seen.add(String(r.id)))
+      .map((r: Json) => ({
+        provider,
+        providerLabel: PROVIDER_LABEL[provider],
+        listingId: String(r.id),
+        address: str(r.address) ?? 'Rightmove listing',
+        lat: Number(r.latitude),
+        lng: Number(r.longitude),
+        priceText: str(r.displayPrice) ?? money(num(r.price), 'GBP'),
+        bedrooms: num(r.bedrooms),
+        bathrooms: null,
+        photoUrl: urls(r.photos)[0] ?? null,
+        url: str(r.url),
+        hasFloorPlan: r.floorplanCount == null ? null : num(r.floorplanCount)! > 0,
+      }));
+  }
   if (provider === 'zoopla') {
     const d = await call<Json>('zoopla', '/search/bycoordinates', { ...coords, searchType: mode === 'rent' ? 'To_Rent' : 'For_Sale' }, ttl);
     return (d.searchResults ?? [])
@@ -136,6 +159,7 @@ export async function searchNearby(provider: RealtyProvider, lat: number, lng: n
         bathrooms: num(r.features?.baths),
         photoUrl: urls(r.photos)[0] ?? null,
         url: null,
+        hasFloorPlan: null,
       }));
   }
   if (provider === 'zillow') {
@@ -161,6 +185,7 @@ export async function searchNearby(provider: RealtyProvider, lat: number, lng: n
           bathrooms: num(p.bathrooms),
           photoUrl: firstUrl(p.media?.propertyPhotoLinks) ?? firstUrl(p.media?.allPropertyPhotos),
           url: null,
+          hasFloorPlan: false, // Zillow's endpoints expose no floor plans
         };
       });
   }
@@ -183,6 +208,7 @@ export async function searchNearby(provider: RealtyProvider, lat: number, lng: n
         bathrooms: num(r.baths) ?? num(r.baths_min),
         photoUrl: str(r.primary_photo) ?? urls(r.photos)[0] ?? null,
         url: str(r.href),
+        hasFloorPlan: null,
       };
     });
 }
@@ -206,6 +232,30 @@ interface Details {
 
 async function details(provider: RealtyProvider, listingId: string): Promise<Details> {
   const ttl = 24 * 3600e3;
+  if (provider === 'rightmove') {
+    const { detail: d = {} } = await call<Json>('rightmove', '/details/byid', { propertyId: listingId }, ttl);
+    const priceText = String(d.price?.primary ?? '').toLowerCase();
+    const rent = d.transactionType === 'RENT' || /pcm|pw/.test(priceText);
+    const sqm = /sq\.?\s*m/i.test(String(d.size?.secondary ?? '')) ? num(d.size.secondary) : null;
+    const sqft = /sq\.?\s*ft/i.test(String(d.size?.primary ?? '')) ? num(d.size.primary) : null;
+    const address = str(d.address) ?? 'Rightmove listing';
+    const postcode = str(d.postcode);
+    const outcode = postcode?.split(' ')[0];
+    return {
+      // "Clarges Street, London, W1J" + "W1J 8AS" → "Clarges Street, London, W1J 8AS"
+      address: !postcode || address.includes(postcode) ? address : outcode && address.endsWith(outcode) ? `${address.slice(0, -outcode.length)}${postcode}` : `${address}, ${postcode}`,
+      lat: num(d.location?.latitude),
+      lng: num(d.location?.longitude),
+      price: num(d.price?.numericValue) != null ? { amount: num(d.price.numericValue)!, currency: 'GBP', period: !rent ? 'sale' : priceText.includes('pw') && !priceText.includes('pcm') ? 'pw' : 'pcm' } : null,
+      bedrooms: num(d.bedrooms),
+      areaSqM: sqm ?? (sqft ? Math.round(sqft * 0.0929) : null),
+      url: str(d.propertyUrl) ?? `https://www.rightmove.co.uk/properties/${listingId}`,
+      description: String(d.fullDescription ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/[ \t]+/g, ' ').trim(),
+      photos: (Array.isArray(d.photos) ? d.photos : []).map((p: Json) => str(p.maxSizeUrl) ?? firstUrl(p)).filter((u: string | null): u is string => !!u),
+      floorPlans: urls(d.floorplans),
+      status: d.status?.available === false ? str(d.status?.label) ?? 'unavailable' : rent ? 'to-rent' : 'for-sale',
+    };
+  }
   if (provider === 'zoopla') {
     const [{ detail: d = {} }, imgs] = await Promise.all([
       call<Json>('zoopla', '/details/byid', { listingId }, ttl),
@@ -295,7 +345,7 @@ async function download(url: string, propertyId: string, name: string): Promise<
   await mkdir(dir, { recursive: true });
   const file = `${name}.${ext}`;
   await writeFile(join(dir, file), buf);
-  return { key: join('media', propertyId, file), mime };
+  return { key: `media/${propertyId}/${file}`, mime }; // forward slashes on every OS, like other storage keys
 }
 
 export async function importRealty(provider: RealtyProvider, listingId: string, propertyId: string, now: string): Promise<{ property: Property; media: PropertyMedia[] }> {

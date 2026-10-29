@@ -33,7 +33,7 @@ export interface SearchResult {
 }
 
 export interface NearbyListing {
-  provider: 'zoopla' | 'zillow' | 'realtor';
+  provider: 'rightmove' | 'zoopla' | 'zillow' | 'realtor';
   providerLabel: string;
   listingId: string;
   address: string;
@@ -44,6 +44,8 @@ export interface NearbyListing {
   bathrooms: number | null;
   photoUrl: string | null;
   url: string | null;
+  /** null when the provider's search doesn't say (the plan is checked on import). */
+  hasFloorPlan: boolean | null;
   importedPropertyId: string | null;
 }
 
