@@ -37,7 +37,7 @@ import { config, metaConfigured } from '../config.js';
 import { imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
 import { AiBudget } from '../meta/client.js';
 import { resolveModels } from '../meta/models.js';
-import { assembleInterpretation, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, furnishRooms, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
+import { assembleInterpretation, FloorplanUnreadableError, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, furnishRooms, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
 import { segmentConcept } from '../meta/sam.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
 import { store } from '../store.js';
@@ -423,18 +423,24 @@ async function parseWithMuse(ctx: Ctx, planImages: PlanRaster[], areaSqM: number
   await ctx.log('parse', `Reading ${planImages.length} plan image(s) with ${model}`);
   const parts = [];
   for (const [i, p] of planImages.entries()) {
-    parts.push(
-      await parseFloorplanLevel({
-        budget: ctx.budget,
-        model,
-        imageDataUrl: p.dataUrl,
-        imageSize: p.size,
-        levelId: `L${i}`,
-        levelIndex: i,
-        levelHint: p.media.levelGuess,
-        planMediaId: p.media.id,
-      }),
-    );
+    try {
+      parts.push(
+        await parseFloorplanLevel({
+          budget: ctx.budget,
+          model,
+          imageDataUrl: p.dataUrl,
+          imageSize: p.size,
+          levelId: `L${i}`,
+          levelIndex: i,
+          levelHint: p.media.levelGuess,
+          planMediaId: p.media.id,
+          onEmpty: (note) => ctx.log('parse', `Muse returned no rooms for plan ${i + 1} (${note}); retrying with more effort`, 'warn'),
+        }),
+      );
+    } catch (e) {
+      if (e instanceof FloorplanUnreadableError) throw new PipelineError('FLOORPLAN_UNREADABLE', e.message);
+      throw e;
+    }
     await ctx.save();
   }
   return assembleInterpretation(parts, areaSqM);

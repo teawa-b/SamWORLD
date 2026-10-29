@@ -94,6 +94,8 @@ interface FloorplanReply {
   uncertainties: string[];
 }
 
+export class FloorplanUnreadableError extends Error {}
+
 const FLOORPLAN_SYSTEM = `You read estate-agent floor plans and return their geometry as data.
 Rules:
 - Coordinates are PIXELS in the supplied image (origin top-left, x right, y down).
@@ -113,17 +115,32 @@ export async function parseFloorplanLevel(opts: {
   levelIndex: number;
   levelHint: string | null;
   planMediaId: string;
+  /** Called when a reply has no rooms, before the one retry. */
+  onEmpty?: (note: string) => Promise<void>;
 }): Promise<{ level: PlanLevel; uncertainties: string[]; provenance: Provenance }> {
-  const { data, model } = await museJson<FloorplanReply>({
-    budget: opts.budget,
-    model: opts.model,
-    system: FLOORPLAN_SYSTEM,
-    text: `Floor plan image, ${opts.imageSize.width}×${opts.imageSize.height} px. ${opts.levelHint ? `Expected level: ${opts.levelHint}.` : ''} Return every room, opening and stair on this level.`,
-    images: [opts.imageDataUrl],
-    schemaName: 'floorplan_level',
-    schema: floorplanSchema,
-    effort: 'medium',
-  });
+  const ask = (effort: 'medium' | 'high', insist: boolean) =>
+    museJson<FloorplanReply>({
+      budget: opts.budget,
+      model: opts.model,
+      system: FLOORPLAN_SYSTEM,
+      text:
+        `Floor plan image, ${opts.imageSize.width}×${opts.imageSize.height} px. ${opts.levelHint ? `Expected level: ${opts.levelHint}.` : ''} Return every room, opening and stair on this level.` +
+        (insist
+          ? ' The image is an estate-agent floor plan: every labelled area (rooms, kitchen, bathroom, WC, hall, landing) is a room. Return at least one room; if the plan really cannot be read, say why in uncertainties.'
+          : ''),
+      images: [opts.imageDataUrl],
+      schemaName: 'floorplan_level',
+      schema: floorplanSchema,
+      effort,
+    });
+  let { data, model } = await ask('medium', false);
+  if (!data.rooms.length) {
+    await opts.onEmpty?.(`level "${data.levelName}", ${data.openings.length} openings; uncertainties: ${data.uncertainties.join(' | ') || 'none'}`);
+    ({ data, model } = await ask('high', true));
+  }
+  if (!data.rooms.length) {
+    throw new FloorplanUnreadableError(`Muse found no rooms on the floor plan, twice. It said: ${data.uncertainties.join(' | ') || 'nothing'}`);
+  }
   const pre = (id: string) => `${opts.levelId}-${id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const level: PlanLevel = {
     id: opts.levelId,
