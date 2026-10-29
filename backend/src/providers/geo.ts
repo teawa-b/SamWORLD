@@ -43,8 +43,19 @@ export async function geocode(q: string): Promise<Place | null> {
   return { lat: Number(hit.lat), lng: Number(hit.lon), label: labelOf(hit.address, hit.display_name), countryCode: hit.address?.country_code ?? '' };
 }
 
+/**
+ * Rough country from coordinates, for when the geocoder can't be reached: Great Britain and Northern Ireland,
+ * and the contiguous US. Coarse boxes (they clip bits of Ireland, Canada and Mexico), so only a fallback; a
+ * provider simply finds nothing at a point outside its country.
+ */
+export function countryFromPoint(lat: number, lng: number): string {
+  if (lat >= 49.8 && lat <= 60.9 && lng >= -8.2 && lng <= 1.8) return 'gb';
+  if (lat >= 24.4 && lat <= 49.4 && lng >= -125 && lng <= -66.9) return 'us';
+  return '';
+}
+
 export async function reverseGeocode(lat: number, lng: number): Promise<Place> {
   // Round to ~100 m so nearby clicks share a cache entry.
   const hit = await nominatim<NomHit>(`/reverse?format=jsonv2&zoom=14&lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}`);
-  return { lat, lng, label: labelOf(hit.address, hit.display_name ?? ''), countryCode: hit.address?.country_code ?? '' };
+  return { lat, lng, label: labelOf(hit.address, hit.display_name ?? ''), countryCode: hit.address?.country_code || countryFromPoint(lat, lng) };
 }

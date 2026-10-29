@@ -11,7 +11,7 @@ import { AiBudget } from './meta/client.js';
 import { redesignRoom, REDESIGN_PROMPT_VERSION } from './meta/image.js';
 import { FIXTURE_PROVIDER, fixtureThumbnail, importFixture, resolveStorageKey, searchFixtures } from './providers/fixture.js';
 import { importRealty, isRealtyProvider, providersFor, realtyStatus, searchNearby, type NearbyListing, type RealtyProvider } from './providers/realtyapi.js';
-import { geocode, reverseGeocode } from './providers/geo.js';
+import { countryFromPoint, geocode, reverseGeocode } from './providers/geo.js';
 import { store } from './store.js';
 import { MODEL_IMAGE_TYPES, toDataUrl } from './lib/image.js';
 import { readFile } from 'node:fs/promises';
@@ -91,7 +91,10 @@ export async function registerRoutes(app: FastifyInstance) {
       z.object({ lat: z.coerce.number().min(-90).max(90), lng: z.coerce.number().min(-180).max(180), mode: z.enum(['rent', 'buy']).default('rent') }),
       req.query,
     );
-    const place = await reverseGeocode(q.lat, q.lng).catch(() => ({ lat: q.lat, lng: q.lng, label: '', countryCode: '' }));
+    const place = await reverseGeocode(q.lat, q.lng).catch((e: Error) => {
+      req.log.warn({ err: e.message }, 'Reverse geocoding failed; guessing the country from the coordinates');
+      return { lat: q.lat, lng: q.lng, label: '', countryCode: countryFromPoint(q.lat, q.lng) };
+    });
     const providers = providersFor(place.countryCode);
     if (!providers.length) return { place, providers, listings: [], notice: 'Listings are available in the UK (Rightmove) and the US (Realtor.com). Try somewhere there.' };
     const status = realtyStatus();
