@@ -5,6 +5,7 @@ import {
   PlacementCandidate,
   blockingSegments,
   buildStructure,
+  closeGaps,
   deriveWalls,
   estimateScale,
   placeObjects,
@@ -105,6 +106,24 @@ describe('placement conventions', () => {
       expect(objects.find((o) => o.id === 'west0')!.positionXYZ[2]).toBeCloseTo(0.5, 2); // north end of west wall
       expect(objects.find((o) => o.id === 'north1')!.positionXYZ[0]).toBeCloseTo(3.5, 2); // east end of north wall
     }
+  });
+});
+
+describe('closing gaps between rooms', () => {
+  it('moves an unmeasured room to meet its neighbour, and leaves two measured rooms apart', () => {
+    const [hall, wc, bed1, bed2] = closeGaps(
+      [
+        [[0, 0], [1, 0], [1, 4], [0, 4]], // hall
+        [[1.3, 1], [3, 1], [3, 2], [1.3, 2]], // WC, 0.3 m east of the hall
+        [[-3, 0], [-0.12, 0], [-0.12, 2], [-3, 2]], // bedroom, 0.12 m west of the hall
+        [[-3, 2.15], [-0.12, 2.15], [-0.12, 4], [-3, 4]], // second bedroom, 0.15 m below the first
+      ],
+      [false, false, true, true],
+    );
+    expect(wc[0][0]).toBeCloseTo(1, 5); // the WC moved to the hall, not the other way round
+    expect(Math.min(...hall.map((p) => p[0]))).toBeCloseTo(-0.12, 5); // the hall moved to the measured bedroom
+    expect(bed1).toEqual([[-3, 0], [-0.12, 0], [-0.12, 2], [-3, 2]]);
+    expect(bed2[0][1]).toBeCloseTo(2.15, 5); // both measured: the gap is real wall thickness
   });
 });
 

@@ -174,6 +174,98 @@ export function alignAxes(polys: Vec2[][], tol = 0.08): Vec2[][] {
   return polys.map((p) => p.map((v) => [xs.get(v[0])!, ys.get(v[1])!] as Vec2));
 }
 
+/**
+ * Close thin gaps between neighbouring rooms, so they share one wall instead of two walls with a sliver between
+ * them (and a door between them has a wall to sit on). Plans are drawn with thick walls and a room traced a little
+ * short leaves a gap the reader can't tell from a real one.
+ *
+ * Works on axis-aligned edges: where two rooms' edges face each other across at most `maxGap`, one edge moves to
+ * meet the other. Only an edge that faces the other room along most of its length moves, preferring a room
+ * without printed dimensions; when both rooms are measured the gap is left (it's likely real wall thickness).
+ * A move that would make rooms overlap is undone.
+ */
+export function closeGaps(polys: Vec2[][], measured: boolean[], maxGap = 0.35): Vec2[][] {
+  const out = polys.map((p) => p.map((v) => [...v] as Vec2));
+  const overlapsOthers = (i: number) => out.some((q, j) => j !== i && polygonOverlapArea(out[i], q, 0.05) > 0.02);
+  const tried = new Set<string>();
+  // One move at a time, rescanning after each: a move changes that room's edges.
+  for (let moves = 0; moves < 4 * out.length; moves++) {
+    let applied = false;
+    scan: for (let i = 0; i < out.length; i++) {
+      for (const ea of axisEdges(out[i])) {
+        for (let j = 0; j < out.length; j++) {
+          if (j === i) continue;
+          for (const eb of axisEdges(out[j])) {
+            if (ea.axis !== eb.axis || ea.out + eb.out !== 0) continue; // parallel, facing each other
+            const gap = (eb.pos - ea.pos) * ea.out;
+            if (gap <= 0.005 || gap > maxGap) continue;
+            const overlap = Math.min(ea.hi, eb.hi) - Math.max(ea.lo, eb.lo);
+            if (overlap < 0.3) continue;
+            // How much of an edge faces other rooms at this distance (a hall side can face two bedrooms).
+            const covered = (k: number, e: ReturnType<typeof axisEdges>[number], at: number) => {
+              let sum = 0;
+              for (let m = 0; m < out.length; m++) {
+                if (m === k) continue;
+                for (const f of axisEdges(out[m])) {
+                  if (f.axis === e.axis && f.out === -e.out && Math.abs(f.pos - at) < 0.01) sum += Math.max(0, Math.min(e.hi, f.hi) - Math.max(e.lo, f.lo));
+                }
+              }
+              return sum / (e.hi - e.lo);
+            };
+            const canA = !measured[i] && covered(i, ea, eb.pos) >= 0.8;
+            const canB = !measured[j] && covered(j, eb, ea.pos) >= 0.8;
+            // Both free: move the smaller room's edge.
+            const moveA = canA && (!canB || polygonArea(out[i]) <= polygonArea(out[j]));
+            if (!moveA && !canB) continue;
+            const [k, e, to] = moveA ? [i, ea, eb.pos] : [j, eb, ea.pos];
+            const key = `${k}:${e.axis}:${e.pos}:${e.lo}:${to}`;
+            if (tried.has(key)) continue;
+            tried.add(key);
+            const before = out[k];
+            out[k] = tidy(before.map((v, n) => (n === e.n0 || n === e.n1 ? (e.axis === 'x' ? [to, v[1]] : [v[0], to]) : v) as Vec2));
+            if (out[k].length < 3 || polygonSelfIntersects(out[k]) || overlapsOthers(k)) {
+              out[k] = before;
+              continue;
+            }
+            applied = true;
+            break scan;
+          }
+        }
+      }
+    }
+    if (!applied) break;
+  }
+  return out;
+}
+
+/** Axis-aligned edges of a polygon: `axis` 'x' means the edge lies at constant x; `out` is the outward side. */
+function axisEdges(poly: Vec2[]): { n0: number; n1: number; axis: 'x' | 'z'; pos: number; lo: number; hi: number; out: 1 | -1 }[] {
+  const edges = [];
+  for (let n0 = 0; n0 < poly.length; n0++) {
+    const n1 = (n0 + 1) % poly.length;
+    const [a, b] = [poly[n0], poly[n1]];
+    const axis = Math.abs(a[0] - b[0]) < 1e-6 ? 'x' : Math.abs(a[1] - b[1]) < 1e-6 ? 'z' : null;
+    if (!axis) continue;
+    const [pos, lo, hi] = axis === 'x' ? [a[0], Math.min(a[1], b[1]), Math.max(a[1], b[1])] : [a[1], Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+    if (hi - lo < 1e-6) continue;
+    const mid = (lo + hi) / 2;
+    const probe: Vec2 = axis === 'x' ? [pos + 0.01, mid] : [mid, pos + 0.01];
+    edges.push({ n0, n1, axis: axis as 'x' | 'z', pos, lo, hi, out: (pointInPolygon(probe, poly) ? -1 : 1) as 1 | -1 });
+  }
+  return edges;
+}
+
+/** Drop repeated and collinear vertices left behind when an edge moves. */
+function tidy(poly: Vec2[]): Vec2[] {
+  let p = poly.filter((v, i) => segLength(v, poly[(i + 1) % poly.length]) > 1e-6);
+  p = p.filter((v, i) => {
+    const a = p[(i - 1 + p.length) % p.length];
+    const b = p[(i + 1) % p.length];
+    return Math.abs((v[0] - a[0]) * (b[1] - a[1]) - (v[1] - a[1]) * (b[0] - a[0])) > 1e-9;
+  });
+  return p;
+}
+
 // ---------------------------------------------------------------------------
 // Scale
 // ---------------------------------------------------------------------------
@@ -410,7 +502,10 @@ export function buildStructure(interp: FloorplanInterpretation, opts: BuildOptio
     const heightEstimated = pl.ceilingHeightMeters == null;
     const height = pl.ceilingHeightMeters ?? opts.defaultCeilingM ?? DEFAULT_CEILING_M;
 
-    const aligned = alignAxes(pl.rooms.map((r) => r.polygonPx.map(conv)));
+    const aligned = closeGaps(
+      alignAxes(pl.rooms.map((r) => r.polygonPx.map(conv))),
+      pl.rooms.map((r) => !!r.measured),
+    );
     const lvlRooms = pl.rooms.map((r, i) => ({ src: r, polygon: aligned[i] }));
     const lvlWalls = deriveWalls(
       pl.id,
@@ -453,7 +548,9 @@ export function buildStructure(interp: FloorplanInterpretation, opts: BuildOptio
         if (!nearest || dist < nearest.dist) nearest = { wall: w, dist, t };
         if (fits(w) && (!nearestFit || dist < nearestFit.dist)) nearestFit = { wall: w, dist, t };
       }
-      const best = nearestFit && nearestFit.dist < 0.8 ? nearestFit : nearest;
+      // Which rooms a door joins is read more reliably than exactly where it is, so a wall the two rooms share
+      // wins from further away than any other wall.
+      const best = nearestFit && nearestFit.dist < (op.roomIds.length > 1 ? 1.5 : 0.8) ? nearestFit : nearest;
       const dims = OPENING_DIMENSIONS[op.type];
       let parentWallId: string | null = null;
       let offset = 0;
