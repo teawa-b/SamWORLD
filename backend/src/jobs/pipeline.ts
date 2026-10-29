@@ -34,7 +34,7 @@ import {
   type VerificationReport,
 } from '../shared/index.js';
 import { config, metaConfigured } from '../config.js';
-import { imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
+import { flattenTransparentPng, imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
 import { AiBudget } from '../meta/client.js';
 import { resolveModels } from '../meta/models.js';
 import { assembleInterpretation, FloorplanUnreadableError, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, furnishRooms, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
@@ -135,7 +135,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
 
   // ---- 2. Layout: floor plan → plan among the photos → photos → listing facts ----
   let planImages = await loadPlanRasters(plans);
-  const photoData = await Promise.all(photos.slice(0, 50).map(async (m) => ({ media: m, buf: await readMedia(m) })));
+  const photoData = await Promise.all(photos.slice(0, 50).map(async (m) => ({ media: m, buf: flattenTransparentPng(await readMedia(m)) })));
   let interp = opts.forceReparse ? undefined : store.get('interpretations', property.id);
   // Estimated layouts are cheap to redo: drop ones made by an older prompt, or without AI now that it's on.
   if (interp && ((interp.layoutSource === 'photos' && interp.provenance.promptVersion !== PROMPT_VERSIONS.layoutFromPhotos) || (interp.layoutSource === 'listing-details' && live))) interp = undefined;
@@ -501,7 +501,7 @@ async function loadPlanRasters(plans: PropertyMedia[]): Promise<PlanRaster[]> {
     if (!key) continue;
     const path = resolveStorageKey(key);
     if (!path) continue;
-    const buf = await readFile(path);
+    const buf = flattenTransparentPng(await readFile(path));
     const size = imageSize(buf);
     if (!size) continue;
     const mime = MODEL_IMAGE_TYPES.has(m.mimeType) ? m.mimeType : 'image/png';

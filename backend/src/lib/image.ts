@@ -1,4 +1,25 @@
-/** Tiny header readers so we never need a native image dependency. */
+/** Tiny header readers so we never need a native image dependency (pngjs is pure JS). */
+import { PNG } from 'pngjs';
+
+/**
+ * Transparent PNGs flattened onto white. Floor plans are often black lines on a transparent background, and
+ * models that drop the alpha channel see an all-black image. Anything else is returned unchanged.
+ */
+export function flattenTransparentPng(buf: Buffer): Buffer {
+  if (buf.length < 26 || buf.readUInt32BE(0) !== 0x89504e47) return buf;
+  const colorType = buf[25];
+  const hasAlpha = colorType === 4 || colorType === 6 || buf.indexOf('tRNS') !== -1;
+  if (!hasAlpha) return buf;
+  const png = PNG.sync.read(buf); // RGBA, 8 bits per channel
+  const d = png.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = d[i + 3] / 255;
+    for (let c = 0; c < 3; c++) d[i + c] = Math.round(d[i + c] * a + 255 * (1 - a));
+    d[i + 3] = 255;
+  }
+  return PNG.sync.write(png, { colorType: 2 });
+}
+
 export function imageSize(buf: Buffer): { width: number; height: number } | null {
   // PNG
   if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47) return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
