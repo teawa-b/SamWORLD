@@ -77,6 +77,74 @@ export async function sampleRealty(log: Log) {
   log('[realty-sample] done');
 }
 
+/** First value anywhere in `v` whose key matches `re` (depth-limited). */
+function findKey(v: unknown, re: RegExp, depth = 0): unknown {
+  if (!v || typeof v !== 'object' || depth > 6) return undefined;
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (re.test(k) && x != null && x !== '') return x;
+    const hit = findKey(x, re, depth + 1);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+/** Floor-plan entries anywhere in `v`, under any key spelled like "floorplan(s)". */
+function planCount(v: unknown): number {
+  const p = findKey(v, /^floor_?plans?$/i);
+  return Array.isArray(p) ? p.length : p ? 1 : 0;
+}
+
+const outcode = (s: string) => s.match(/\b([A-Z]{1,2}\d[A-Z\d]?)(\s*\d[A-Z]{2})?\b/)?.[0] ?? null;
+
+/**
+ * REALTYAPI_PROBE=3: for Zoopla listings, can a floor plan be found elsewhere? Checks Rightmove's address match
+ * and Zoopla's own listing history for the same property. Logs counts and field names only, no addresses.
+ * Spends about 4 calls per listing plus the searches (~30 in all).
+ */
+export async function checkPlanSources(log: Log) {
+  const n = Number(process.env.REALTYAPI_PROBE_LISTINGS ?? 6);
+  const picked: { id: string; channel: string }[] = [];
+  for (const searchType of ['For_Sale', 'To_Rent']) {
+    const res: any = await getJson(`https://zoopla.realtyapi.io/search/bycoordinates?latitude=51.5074&longitude=-0.1278&radius=3&searchType=${searchType}`);
+    const list = (res?.searchResults ?? []) as any[];
+    for (const r of list.slice(0, Math.ceil(n / 2))) picked.push({ id: String(r.listingId ?? r.id), channel: searchType });
+  }
+  let firstHistoryLogged = false;
+  for (const [i, { id, channel }] of picked.entries()) {
+    const tag = `[plan-sources] #${i + 1} ${channel}`;
+    const det: any = await getJson(`https://zoopla.realtyapi.io/details/byid?listingId=${id}`);
+    const d = det?.detail ?? {};
+    const address = String(d.displayAddress ?? '');
+    const postcode = findKey(d, /^post_?code$/i);
+    const uprn = findKey(d, /^uprn$/i);
+    const query = postcode && !address.includes(String(postcode)) ? `${address}, ${postcode}` : address;
+    log(`${tag} zoopla`, { plans: planCount(d), beds: d.beds ?? null, hasOutcode: !!outcode(query), hasPostcode: !!postcode, hasUprn: !!uprn });
+
+    const rm: any = await getJson(`https://rightmove.realtyapi.io/details/byaddress?address=${encodeURIComponent(query)}`);
+    log(`${tag} rightmove`, typeof rm === 'string' ? { error: rm.slice(0, 120) } : {
+      matchConfidence: findKey(rm, /^matchConfidence$/) ?? null,
+      plans: planCount(rm),
+      beds: findKey(rm, /^bedrooms$/i) ?? null,
+      alternatives: (findKey(rm, /^alternatives$/) as unknown[] | undefined)?.length ?? 0,
+      keys: Object.keys(rm ?? {}).slice(0, 30),
+    });
+
+    const hq = uprn ? `uprn=${uprn}` : `address=${encodeURIComponent(query)}`;
+    const hist: any = await getJson(`https://zoopla.realtyapi.io/history?${hq}`);
+    const past = (findKey(hist, /^historicListings$/) ?? []) as any[];
+    if (!firstHistoryLogged && past.length) {
+      log(`${tag} history listing shape`, keysOf(past[0]));
+      firstHistoryLogged = true;
+    }
+    log(`${tag} history`, typeof hist === 'string' ? { error: hist.slice(0, 120) } : {
+      historicListings: Array.isArray(past) ? past.length : 0,
+      withPlans: Array.isArray(past) ? past.filter((p) => planCount(p) > 0).length : 0,
+      keys: Object.keys(hist ?? {}).slice(0, 30),
+    });
+  }
+  log('[plan-sources] done');
+}
+
 export async function probeRealty(log: Log) {
   const llms = await getText('https://www.realtyapi.io/llms.txt');
   log('[realty-probe] llms.txt lines', (llms ?? '').split('\n').filter((l) => /realtyapi\.io|provider|zoopla|zillow|realtor|redfin|rightmove/i.test(l)).slice(0, 80));

@@ -4,7 +4,7 @@ import { capabilities, config } from './config.js';
 import { recoverStaleRuns, startRunner } from './jobs/runner.js';
 import { registerRoutes } from './routes.js';
 import { store } from './store.js';
-import { probeRealty, sampleRealty } from './providers/realty-probe.js';
+import { checkPlanSources, probeRealty, sampleRealty } from './providers/realty-probe.js';
 import { resolveModels } from './meta/models.js';
 
 export async function buildApp() {
@@ -26,4 +26,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   void resolveModels().then((r) => app.log.info(r, r.error ? 'Meta model list unavailable' : 'Meta models resolved'));
   if (process.env.REALTYAPI_PROBE === '1') void probeRealty((msg, obj) => app.log.info({ probe: obj }, msg));
   if (process.env.REALTYAPI_PROBE === '2') void sampleRealty((msg, obj) => app.log.info({ probe: obj }, msg));
+  if (process.env.REALTYAPI_PROBE === '3') void checkPlanSources((msg, obj) => app.log.info({ probe: obj }, msg));
 }
