@@ -222,6 +222,52 @@ export function validateFootprint(
   return reasons;
 }
 
+/**
+ * A run of units for a kitchen whose suggestions have an oven, sink or kettle but no units (Muse sometimes lists
+ * only the appliances), so they don't stand on bare floor. One run per wall those items were put against, at most
+ * two, about 70% of the wall long. Marked as added, not seen in the photos.
+ */
+function missingKitchenRuns(
+  structure: Structure,
+  candidates: PlacementCandidate[],
+  kindFor: (c: PlacementCandidate) => string,
+  provenance: Provenance,
+): PlacementCandidate[] {
+  const added: PlacementCandidate[] = [];
+  for (const room of structure.rooms.filter((r) => r.type === 'kitchen')) {
+    const here = candidates.filter((c) => c.roomId === room.id);
+    if (here.some((c) => KITCHEN_RUN.has(kindFor(c)))) continue;
+    const needs = here.filter((c) => BUILT_IN.has(c.kind) || ['kettle', 'toaster', 'microwave', 'coffee-machine'].includes(c.kind));
+    if (!needs.length) continue;
+    const bySide = new Map<WallSide, number[]>();
+    for (const c of needs) {
+      if (c.anchor.type === 'against-wall') bySide.set(c.anchor.side, [...(bySide.get(c.anchor.side) ?? []), c.anchor.along]);
+      else if (c.anchor.type === 'corner') bySide.set(c.anchor.sides[0], [...(bySide.get(c.anchor.sides[0]) ?? []), 0.5]);
+    }
+    if (!bySide.size) {
+      const longest = (['north', 'south', 'east', 'west'] as WallSide[]).sort((a, b) => (edgesForSide(room.polygonXZMeters, b)[0]?.len ?? 0) - (edgesForSide(room.polygonXZMeters, a)[0]?.len ?? 0))[0];
+      bySide.set(longest, [0.5]);
+    }
+    for (const [side, alongs] of [...bySide].sort((a, b) => b[1].length - a[1].length).slice(0, 2)) {
+      const len = edgesForSide(room.polygonXZMeters, side)[0]?.len ?? 0;
+      if (len < 1.25) continue;
+      added.push({
+        id: `${room.id}-units-${side}`,
+        roomId: room.id,
+        kind: 'kitchen-units',
+        anchor: { type: 'against-wall', side, along: alongs.reduce((s, a) => s + a, 0) / alongs.length },
+        sizeM: [round(Math.max(1.2, len * 0.7)), 0.9, 0.6],
+        sourceDetectionIds: [],
+        sourceMediaIds: [],
+        confidence: 0.4,
+        rationale: 'Added so the kitchen appliances have units to sit in; units were not suggested from the photos.',
+        provenance,
+      });
+    }
+  }
+  return added;
+}
+
 export function placeObjects(
   structure: Structure,
   candidates: PlacementCandidate[],
@@ -239,7 +285,7 @@ export function placeObjects(
 
   // Floor-standing objects before what goes on or above them, larger first: they have fewer valid positions.
   const stage = (c: PlacementCandidate) => ({ floor: 0, 'built-in': 1, surface: 2, wall: 3 })[mountOf(kindFor(c))];
-  const ordered = [...candidates].sort((a, b) => stage(a) - stage(b) || b.sizeM[0] * b.sizeM[2] - a.sizeM[0] * a.sizeM[2]);
+  const ordered = [...candidates, ...missingKitchenRuns(structure, candidates, kindFor, placementProvenance)].sort((a, b) => stage(a) - stage(b) || b.sizeM[0] * b.sizeM[2] - a.sizeM[0] * a.sizeM[2]);
 
   for (const cand of ordered) {
     const room = roomOf.get(cand.roomId);

@@ -197,6 +197,19 @@ describe('fittings (shaped like the Craven Street flat)', () => {
     expect(objects.find((o) => o.id === 'base')!.kind).toBe('kitchen-units');
   });
 
+  it('adds a run of units when a kitchen has appliances but no units', () => {
+    const { objects, rejected } = placeObjects(
+      structure,
+      [mk('oven', 'kitchen', 'oven', 'east', 0.3, [0.6, 0.85, 0.55]), mk('sink', 'kitchen', 'sink', 'east', 0.7, [0.8, 0.2, 0.5]), mk('kettle', 'kitchen', 'kettle', 'east', 0.5, [0.2, 0.25, 0.2])],
+      prov,
+    );
+    expect(rejected).toEqual([]);
+    const units = objects.find((o) => o.kind === 'kitchen-units')!;
+    expect(units.placementNotes.join(' ')).toMatch(/not suggested from the photos/);
+    expect(objects.find((o) => o.id === 'oven')!.placementNotes).toContain('fitted into the kitchen units');
+    expect(objects.find((o) => o.id === 'kettle')!.positionXYZ[1]).toBeGreaterThan(0.9); // on the worktop
+  });
+
   it('fits an oven and sink into the kitchen units and hangs wall cupboards above them', () => {
     const { objects, rejected } = placeObjects(
       structure,
