@@ -23,6 +23,14 @@ const FALLBACK_SIDES: Record<WallSide, WallSide[]> = {
   west: ['south', 'north', 'east'],
 };
 
+const OPPOSITE: Record<WallSide, WallSide> = { north: 'south', south: 'north', east: 'west', west: 'east' };
+
+/** The asked corner along either wall, then the neighbouring corners, then the opposite one. */
+function cornersFrom(a: WallSide, b: WallSide): { side: WallSide; along: WallSide }[] {
+  const corners: [WallSide, WallSide][] = [[a, b], [a, OPPOSITE[b]], [OPPOSITE[a], b], [OPPOSITE[a], OPPOSITE[b]]];
+  return corners.flatMap(([x, y]) => [{ side: x, along: y }, { side: y, along: x }]);
+}
+
 const DOOR_CLEARANCE_M = 0.8;
 const WALL_GAP_M = 0.03;
 
@@ -42,7 +50,7 @@ const IN_WORKTOP = new Set(['sink', 'hob']);
 const SURFACES = new Set(['table', 'side-table', 'bedside-table', 'nightstand', 'desk', 'dresser', 'chest-of-drawers', 'sideboard', 'console-table', 'tv-unit', 'coffee-table', 'dining-table', 'cabinet', 'kitchen-units', 'counter', 'island', 'shelf', 'bookcase']);
 const KITCHEN_RUN = new Set(['kitchen-units', 'counter', 'island']);
 /** Kinds Muse uses for kitchen units; in a kitchen they're drawn as units with a worktop. */
-const KITCHEN_CABINETS = new Set(['cabinet', 'cupboard', 'counter', 'worktop', 'kitchen-cabinet', 'kitchen-units']);
+const KITCHEN_CABINETS = new Set(['cabinet', 'cupboard', 'counter', 'worktop', 'countertop', 'base-cabinet', 'base-unit', 'kitchen-cabinet', 'kitchen-unit', 'kitchen-units']);
 
 const mountOf = (kind: string): Mount => (WALL_MOUNTED.has(kind) ? 'wall' : ON_SURFACES.has(kind) ? 'surface' : BUILT_IN.has(kind) ? 'built-in' : 'floor');
 
@@ -256,14 +264,18 @@ export function placeObjects(
     } else {
       // The suggested wall first; if nothing fits there (Muse can misjudge the side from a photo), the
       // neighbouring walls and then the opposite one, so a bath isn't lost because its wall was misread.
+      // A corner is tried along either of its walls, then the other corners.
       const asked: WallSide = cand.anchor.type === 'against-wall' ? cand.anchor.side : cand.anchor.sides[0];
-      const sides: WallSide[] = cand.anchor.type === 'against-wall' ? [asked, ...FALLBACK_SIDES[asked]] : [asked];
-      let along = cand.anchor.type === 'against-wall' ? cand.anchor.along : 0.5;
-      for (const side of sides) {
+      const plan: { side: WallSide; along: number | WallSide }[] =
+        cand.anchor.type === 'against-wall'
+          ? [asked, ...FALLBACK_SIDES[asked]].map((side) => ({ side, along: (cand.anchor as { along: number }).along }))
+          : cornersFrom(cand.anchor.sides[0], cand.anchor.sides[1]);
+      for (const { side, along: want } of plan) {
         const edges = edgesForSide(room.polygonXZMeters, side);
-        if (cand.anchor.type === 'corner' && edges[0]) {
-          // Choose the end of the first wall nearest the second side.
-          const second = SIDE_NORMALS[cand.anchor.sides[1]];
+        let along = typeof want === 'number' ? want : 0.5;
+        if (typeof want !== 'number' && edges[0]) {
+          // The end of the wall nearest the corner's other side.
+          const second = SIDE_NORMALS[want];
           const proj = (p: Vec2) => p[0] * second[0] + p[1] * second[1];
           along = proj(edges[0].a) > proj(edges[0].b) ? 0 : 1;
         }

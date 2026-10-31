@@ -179,6 +179,24 @@ describe('fittings (shaped like the Craven Street flat)', () => {
     expect(objects[0].placementNotes[0]).toMatch(/instead of the west wall/);
   });
 
+  it('tries the other corners when the asked corner is a doorway', () => {
+    // The bathroom door is on its west wall, so a bath in the south-west corner can't go there.
+    const tub = { ...mk('tub', 'bath', 'bathtub', 'west', 0, [4.5, 0.55, 0.7]), anchor: { type: 'corner' as const, sides: ['west', 'south'] as ['west', 'south'] } };
+    const { objects, rejected } = placeObjects(structure, [tub], prov);
+    expect(rejected).toEqual([]);
+    expect(objects[0].placementNotes[0]).not.toMatch(/^against west wall$/);
+  });
+
+  it('treats a base cabinet in a kitchen as units the sink can sit in', () => {
+    const { objects, rejected } = placeObjects(
+      structure,
+      [mk('base', 'kitchen', 'base-cabinet', 'east', 0.5, [3.0, 0.9, 0.6]), mk('sink', 'kitchen', 'sink', 'east', 0.5, [0.8, 0.2, 0.5])],
+      prov,
+    );
+    expect(rejected).toEqual([]);
+    expect(objects.find((o) => o.id === 'base')!.kind).toBe('kitchen-units');
+  });
+
   it('fits an oven and sink into the kitchen units and hangs wall cupboards above them', () => {
     const { objects, rejected } = placeObjects(
       structure,
