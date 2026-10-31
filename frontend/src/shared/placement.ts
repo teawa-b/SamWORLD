@@ -45,6 +45,10 @@ type Mount = 'floor' | 'wall' | 'surface' | 'built-in';
 const WALL_MOUNTED = new Set(['mirror', 'picture', 'painting', 'artwork', 'frame', 'clock', 'wall-cabinet', 'bathroom-cabinet', 'towel-rail', 'wall-light']);
 const ON_SURFACES = new Set(['lamp', 'table-lamp', 'kettle', 'toaster', 'microwave', 'coffee-machine', 'vase', 'speaker', 'radio', 'books', 'fruit-bowl']);
 const BUILT_IN = new Set(['oven', 'cooker', 'hob', 'stove', 'sink', 'dishwasher', 'washing-machine', 'extractor-hood']);
+/** Small kitchen items that belong on the worktop. */
+const ON_WORKTOP = new Set(['kettle', 'toaster', 'microwave', 'coffee-machine']);
+/** Lower than this, a "surface" is a footstool or a bottom shelf: nothing is stood on it. */
+const MIN_SUPPORT_M = 0.4;
 /** Built-ins set into the worktop rather than the front of the run. */
 const IN_WORKTOP = new Set(['sink', 'hob']);
 const SURFACES = new Set(['table', 'side-table', 'bedside-table', 'nightstand', 'desk', 'dresser', 'chest-of-drawers', 'sideboard', 'console-table', 'tv-unit', 'coffee-table', 'dining-table', 'cabinet', 'kitchen-units', 'counter', 'island', 'shelf', 'bookcase']);
@@ -62,6 +66,10 @@ interface Placed {
   y0: number;
   y1: number;
   depth: number;
+  /** Centre, rotation and width, to line appliances up inside a kitchen run. */
+  c: Vec2;
+  rot: number;
+  w: number;
 }
 
 export interface PlacementResult {
@@ -185,7 +193,7 @@ function verticalFit(kind: string, h: number, fp: Vec2[], placed: Placed[], ceil
   }
   if (mount === 'surface') {
     const c: Vec2 = [fp.reduce((s, p) => s + p[0], 0) / fp.length, fp.reduce((s, p) => s + p[1], 0) / fp.length];
-    const support = under.filter((p) => SURFACES.has(p.kind) && pointInPolygon(c, p.fp)).sort((a, b) => b.y1 - a.y1)[0];
+    const support = under.filter((p) => SURFACES.has(p.kind) && p.y1 >= MIN_SUPPORT_M && pointInPolygon(c, p.fp)).sort((a, b) => b.y1 - a.y1)[0];
     return { y0: support ? support.y1 : 0, h, run: null };
   }
   if (mount === 'built-in') {
@@ -237,7 +245,7 @@ function missingKitchenRuns(
   for (const room of structure.rooms.filter((r) => r.type === 'kitchen')) {
     const here = candidates.filter((c) => c.roomId === room.id);
     if (here.some((c) => KITCHEN_RUN.has(kindFor(c)))) continue;
-    const needs = here.filter((c) => BUILT_IN.has(c.kind) || ['kettle', 'toaster', 'microwave', 'coffee-machine'].includes(c.kind));
+    const needs = here.filter((c) => BUILT_IN.has(c.kind) || ON_WORKTOP.has(c.kind));
     if (!needs.length) continue;
     const bySide = new Map<WallSide, number[]>();
     for (const c of needs) {
@@ -344,6 +352,28 @@ export function placeObjects(
       }
     }
 
+    // Kitchen appliances and worktop items go in or on the units: positions along each run already placed come
+    // first (the run on the asked wall before others), so an oven isn't left standing alone on another wall.
+    const askedNote = attempts[0]?.note;
+    const runs = placed.filter((p) => KITCHEN_RUN.has(p.kind));
+    if (runs.length && (BUILT_IN.has(kind) || ON_WORKTOP.has(kind))) {
+      const askedRot = cand.anchor.type === 'centre' ? null : attempts[0]?.rot;
+      const facing = (p: Placed) => (askedRot != null && Math.abs(Math.atan2(Math.sin(p.rot - askedRot), Math.cos(p.rot - askedRot))) < 0.1 ? 0 : 1);
+      const inRun: typeof attempts = [];
+      for (const run of [...runs].sort((a, b) => facing(a) - facing(b))) {
+        const slack = run.w - w;
+        if (slack < 0) continue;
+        const axis: Vec2 = [Math.cos(run.rot), -Math.sin(run.rot)];
+        const front: Vec2 = [Math.sin(run.rot), Math.cos(run.rot)];
+        const back = (d - run.depth) / 2; // line the backs up against the wall
+        for (const t of [0, -0.25, 0.25, -0.5, 0.5, -0.75, 0.75, -1, 1]) {
+          const s = (t * slack) / 2;
+          inRun.push({ c: [run.c[0] + axis[0] * s + front[0] * back, run.c[1] + axis[1] * s + front[1] * back], rot: run.rot, note: 'in the kitchen units' });
+        }
+      }
+      attempts.unshift(...inRun);
+    }
+
     let success: { c: Vec2; rot: number; fp: Vec2[]; note: string; y0: number; h: number; run: Placed | null } | null = null;
     const lastReasons = new Set<string>();
     for (const at of attempts) {
@@ -362,7 +392,7 @@ export function placeObjects(
       continue;
     }
     notes.push(success.note);
-    if (attempts[0] && success.note !== attempts[0].note) notes.push('moved from AI-suggested position to satisfy constraints');
+    if (askedNote && success.note !== askedNote && success.note !== 'in the kitchen units') notes.push('moved from AI-suggested position to satisfy constraints');
 
     let { c, fp } = success;
     let depth = d;
@@ -379,7 +409,7 @@ export function placeObjects(
     } else if (success.run) notes.push('set into the worktop');
     else if (mount === 'surface' && success.y0 > 0) notes.push(`standing on a surface ${success.y0.toFixed(2)} m up`);
     else if (mount === 'wall') notes.push(`hung ${success.y0.toFixed(2)} m above the floor`);
-    placed.push({ id: cand.id, kind, fp, y0: success.y0, y1: success.y0 + success.h, depth });
+    placed.push({ id: cand.id, kind, fp, y0: success.y0, y1: success.y0 + success.h, depth, c, rot: success.rot, w });
     placedByRoom.set(room.id, placed);
 
     const slid = success.note.includes('slid') || success.note.includes('nudged') || success.note.includes('instead of');

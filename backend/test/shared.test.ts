@@ -210,6 +210,32 @@ describe('fittings (shaped like the Craven Street flat)', () => {
     expect(objects.find((o) => o.id === 'kettle')!.positionXYZ[1]).toBeGreaterThan(0.9); // on the worktop
   });
 
+  it('moves an oven into the units on another wall rather than leaving it alone', () => {
+    const { objects, rejected } = placeObjects(
+      structure,
+      [mk('units', 'kitchen', 'cabinet', 'east', 0.5, [3.0, 0.9, 0.6]), mk('oven', 'kitchen', 'oven', 'north', 0.5, [0.6, 0.85, 0.55])],
+      prov,
+    );
+    expect(rejected).toEqual([]);
+    const oven = objects.find((o) => o.id === 'oven')!;
+    expect(oven.placementNotes).toContain('fitted into the kitchen units');
+    expect(oven.rotationY).toBeCloseTo(objects.find((o) => o.id === 'units')!.rotationY, 5);
+  });
+
+  it('puts a toaster on the worktop, not on a 20 cm shelf', () => {
+    const { objects } = placeObjects(
+      structure,
+      [
+        mk('units', 'kitchen', 'cabinet', 'east', 0.5, [3.0, 0.9, 0.6]),
+        mk('shelf', 'kitchen', 'shelf', 'north', 0.5, [1.0, 0.2, 0.3]),
+        mk('toaster', 'kitchen', 'toaster', 'north', 0.5, [0.3, 0.2, 0.2]),
+      ],
+      prov,
+    );
+    const toaster = objects.find((o) => o.id === 'toaster')!;
+    expect(toaster.positionXYZ[1] - 0.1).toBeCloseTo(0.9, 2); // on the worktop
+  });
+
   it('fits an oven and sink into the kitchen units and hangs wall cupboards above them', () => {
     const { objects, rejected } = placeObjects(
       structure,
