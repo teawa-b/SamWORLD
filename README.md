@@ -19,35 +19,27 @@ from the bedrooms, bathrooms and area) and arranges a believable estimated
 layout. Photos supply appearance and evidence. Everything inferred is flagged
 as estimated in the UI and in the saved scene.
 
-## What works today, and what is simulated
+## Main journey (desktop browser)
 
-This was built in a sandbox with **no Meta API key and no network access to
-`api.meta.ai`**, so no live Meta inference has run yet. The live code paths
-follow Meta's official cookbook and are covered by a test against a local fake
-endpoint, but they still need a first real run with your key.
+1. **Import**: paste a public listing URL, drop photos and floor plans, or paste image URLs. Every source goes through the same backend import API (`backend/src/routes-import.ts`), which a future browser extension can call too.
+2. **Review media**: include/exclude images, mark floor plans, label rooms (photos with the same label are treated as one room), reorder, and optionally ask Muse for room suggestions (shown, never auto-applied).
+3. **Floor plan**: with `MODEL_API_KEY`, Muse reads it. Without a key (or to fix Muse's reading), the **plan editor** lets you trace rooms, doors, windows and stairs over the plan image and enter printed sizes for scale. No AI is needed for a plan-accurate 3D shell.
+4. **Generate**: the progress screen shows each stage as done, skipped (with the reason) or failed.
+5. **Explore**: dollhouse (roof off, framed on open) and walkthrough (WASD/drag, wall collision), floor-plan mini-map with your position, source-photo viewer with "view this room in 3D", click furniture to move/turn/hide/remove (saved without a rebuild), and per-object SAM 3D reconstruction when enabled.
+
+The VR button is hidden unless the frontend is built with `VITE_ENABLE_XR=true`; the WebXR systems are kept.
+
+## What works today, and what is simulated
 
 | Area | Status |
 | --- | --- |
-| IWSDK app: desktop 3D, dollhouse, floor separation, roof, wall pull-out, reset, day/night, empty rooms, evidence colours | **Working** (checked in headless Chromium) |
-| Walkthrough: enter a room at 1:1, tap white circles to glide between look-around points (rooms, doorways, stairs), drag to look | **Working** on phone and desktop (headless browser). Same markers work with the VR controller trigger, plus thumbstick moves; **not tested on a headset** |
-| Wall & floor textures | **Working.** With photos + `MODEL_API_KEY`, Muse Spark reads each room's finishes and picks a clean patch of wall and floor; the browser crops it from the real photo and tiles it. Rooms without photos (including the demo) use labelled default finishes by room type. Photo path verified with a synthetic test photo, **not yet with a real listing** |
-| WebXR session + in-headset menu | **Working in the IWER emulator**. Hand/controller grab of the plinth and lift handles is **not yet tested on a real Quest** |
-| Plan → structure (scale from printed dimensions, walls from room polygons, door/window gaps, stairs, roof) | **Working**, deterministic, unit-tested |
-| Placement engine (containment, doorway clearance, collisions) and geometry verification | **Working**, unit-tested |
-| Job pipeline, persistence, caching, corrections, shell-first preview | **Working**, integration-tested |
-| Muse Spark plan parsing / photo matching / placement / verification pass | **Implemented, not yet run against the real API** (needs `MODEL_API_KEY`) |
-| SAM 3.1 segmentation (via `@meta-sam/parser`) | **Implemented, not yet run against the real API** |
-| Muse Image redesign | **Implemented, not yet run against the real API** (off unless `REDESIGN_ENABLED=true`) |
-| Demo property | **Project-drawn** two-storey plan (fictional address). The plan reading comes from a **hand-authored reference interpretation** labelled `fixture:hand-authored`. **No photos are included** |
-| Listings without a floor plan | **Working.** Layout source is tried in order: listing plan → plan found among the photos (Muse) → room list read from photos (Muse) → room list from listing facts. The room list is arranged by a deterministic corridor layout (hall, day rooms one side, bedrooms the other, stairs for houses), unit-tested for connectivity and verification. The UI shows "Layout from" and an **estimated layout** badge |
-| Furniture | **Proxy shapes** from hand-authored placement suggestions, labelled as such. With a key and photos, suggestions come from Muse + SAM. Rooms nobody photographed are furnished by **Muse Spark** with typical pieces for the room's type, size and doors (a fixed table by room type when offline), labelled "typical, not observed". Every model in the stack is a Meta model: Muse Spark/Wonder, SAM 3.1, Muse Image and the optional SAM 3D; positions are then checked by deterministic code, not another AI |
-| Globe + live listings | **Built.** The home screen is a MapLibre globe (OpenFreeMap tiles, no key) showing listings near a tapped point, a search or your location: Rightmove in the UK and Realtor.com in the US, via RealtyAPI, showing only homes with a floor plan. Endpoints come from the providers' published specs and field names from sampled responses (`docs/realtyapi.md`). Mapping is unit-tested; the full live flow has **not yet been clicked through on the deployed site** |
-| SAM 3D Objects on Modal | **Scaffold only, never deployed.** Off by default; app works fully without it |
-| Supabase / R2 | Not wired up. A JSON-file job table is used (allowed for the prototype); `db/schema.sql` has the Postgres tables |
-| Hosting / live URL | **Deployed on Railway** (frontend + backend services, see `docs/deployment.md`). Running in fixture mode until `MODEL_API_KEY` is set on the backend |
-
-Screenshots from headless Chromium (desktop) and the IWER emulator (XR):
-`docs/screenshots/`.
+| Import: uploads (JPG/PNG/WebP, type-sniffed, size/integrity checked, de-duplicated), image URLs, listing URLs (robots.txt honoured, SSRF-guarded, generic + site adapters) | **Working**, integration-tested. Listing-URL extraction tested against sample HTML only: the dev sandbox has no internet access |
+| Review screen, plan editor, honest progress steps, furniture editing, photo viewer, mini-map | **Working**, clicked through in headless Chromium on desktop |
+| Plan → structure (scale from printed dimensions, walls from room polygons, door/window gaps, stairs, roof) | **Working**, deterministic, unit-tested; a hand-traced plan builds with 0 AI calls |
+| Muse Spark plan reading / photo matching / finishes / placement / review; SAM 3.1 segmentation | **Running on the deployed backend** (Railway logs, Oct 2026: e.g. 49 Meta calls, 50 SAM 3.1 detections per build). New this round: user room labels are passed to Muse as hints, and a review-time image classifier; those two prompts have **not yet run live** |
+| SAM 3D Objects | **Adapter built and tested against a local fake worker only.** Providers: the Modal worker in `worker-3d/` (never deployed) or fal.ai `fal-ai/sam-3/3d-objects` (field names partly unverified: see `docs/modal-sam3d.md`). Splat PLY output is drawn as a point cloud and labelled as a splat |
+| Furniture | Proxy shapes, labelled by evidence: seen in a photo / typical, not seen / SAM 3D |
+| Demo property | Project-drawn plans (fictional address), no real photos |
 
 ## Quick start
 
@@ -66,8 +58,9 @@ npm run dev:runtime             # https://localhost:8081 (self-signed; Vite prox
 From the repo root, `npm run install:all`, `npm run dev:backend` and
 `npm run dev:frontend` do the same.
 
-Open https://localhost:8081. The home screen is a globe: tap a place or use your location to see listings nearby (needs `REALTYAPI_KEY`), or open the demo home below the search box and click **Explore in 3D**. On localhost the IWSDK dev plugin injects the IWER XR
-emulator so you can try **Enter XR** without a headset.
+Open https://localhost:8081. The home screen is the import screen: add photos and a floor plan (or open the demo home), review them, trace the plan if no AI key is set, and click **Generate 3D**. The map of live listings is still available from the link at the bottom (needs `REALTYAPI_KEY`). On localhost the IWSDK dev plugin also injects the IWER XR emulator ("Enter XR" pill); that is a dev-only overlay.
+
+To try it without any keys: upload a floor plan image plus a few room photos, mark the plan on the review screen, click **Trace floor plan**, draw the rooms (enter the printed size of at least one room for scale), add doors, then **Save and build 3D**.
 
 To run the reconstruction once and bake static scenes (the viewer then works
 without the API, e.g. on static hosting):
@@ -87,6 +80,7 @@ cd backend && npm run bake      # writes ../frontend/public/cached/ (or BAKE_OUT
 | Hide all walls / pull one wall | `W` / `P`, then click a wall | menu / trigger on a wall |
 | Empty rooms, night, evidence colours | `F`, `N`, `V` | menu |
 | Select / enter a room | click its floor, then `E` | trigger on the floor, then **Enter room** |
+| Select furniture | click it; arrows move 10 cm (Shift 50 cm), `[` `]` turn | — |
 | Walk | tap/click a white circle to move, drag to look, `WASD` on desktop | trigger on a circle, left stick move, right stick snap turn |
 | Back to dollhouse | `Esc` | menu |
 | Reset | `R` | menu |

@@ -1,4 +1,22 @@
-# SAM 3D Objects on Modal (optional)
+# SAM 3D Objects (optional): Modal or fal.ai
+
+Two interchangeable providers sit behind `backend/src/jobs/sam3d.ts`:
+
+| `SAM3D_PROVIDER` | Needs | Status |
+| --- | --- | --- |
+| `modal` (default) | `MODAL_ENDPOINT_URL`, `MODAL_AUTH_SECRET`, the `worker-3d/` deployment | Scaffold, never deployed |
+| `fal` | `FAL_KEY` (optional `FAL_SAM3D_ENDPOINT`, default `fal-ai/sam-3/3d-objects`) | Adapter written, **never called for real**: fal.ai was not reachable from the dev sandbox |
+
+Both need `SAM3D_ENABLED=true`. Nothing is ever reconstructed automatically from the viewer: the user selects an object, picks the SAM 3.1 outline (photo + mask) to build from, and confirms a "paid inference" prompt; the API also refuses requests without `approveGpuCost: true`. Results, including model errors, are cached by content hash (`DATA_DIR/sam3d-cache.json`).
+
+### fal.ai specifics (verify before the first run)
+
+- Queue API: `POST https://queue.fal.run/fal-ai/sam-3/3d-objects` with `Authorization: Key $FAL_KEY`, then poll the returned `status_url` and read `response_url`.
+- Input sent: `image_url` (the listing photo as a data URI), `prompt` (the SAM 3.1 concept, e.g. "sofa") and `seed`. These are the fields fal's docs/guide show. Whether the endpoint also accepts a **mask** was not confirmed, so the mask is not sent yet. If it does, add it in `callFal`.
+- Output: the adapter takes the first GLB in the result (fal's guide shows `individual_glbs` / `model_glb`), otherwise a PLY (Gaussian splat). Only files on fal's own hosts are downloaded. If fal returns neither, the error lists the keys it did return.
+- Price: fal's page listed about $0.02 per unit at the time of writing. Check the current price and your fal balance first.
+
+# Modal worker
 
 **Default: off.** The app works fully with proxy furniture. Nothing in this
 document has been run yet: `worker-3d/app.py` is a scaffold that has never been

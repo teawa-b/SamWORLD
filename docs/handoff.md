@@ -62,3 +62,16 @@ Listings: RealtyAPI — Rightmove for the UK, Realtor.com for the US; the globe 
 5. For the demo video, prefer listings **with** a floor plan; consider a "Floor plan" badge on the globe's listing cards.
 
 Other open items: SAM 3D approve switch in the UI; Muse review for photo-only layouts (currently skipped without a plan).
+
+## Update (Nov 2026): property reconstruction journey
+
+Work on branch `feature/property-reconstruction` (not merged; `main` auto-deploys).
+
+- New home screen = **Import** (listing URL / upload / image URLs) → **Review media** → optional **plan editor** → Generate → Explore. The globe is a secondary "Browse listings" link.
+- Backend: `providers/ingest.ts` (validation, storage, URL downloads), `providers/listing-url.ts` (generic extractor + adapters), `lib/safe-fetch.ts` (SSRF guard, robots.txt), `routes-import.ts` (all new endpoints), `http.ts` (shared route helpers).
+- A hand-traced plan is stored as the property's interpretation (`provenance.method = admin-correction`) and every rebuild uses it, with or without AI.
+- Viewer: furniture picking/editing (`systems/objects.ts`), mini-map (`ui/minimap.ts`), photo viewer (`ui/photos.ts`), plan editor (`ui/plan-editor.ts`), import/review (`ui/importer.ts`).
+- SAM 3D: per-object, approval-gated; `SAM3D_PROVIDER=modal|fal`. Splat PLY is shown as a point cloud (`shared/splat.ts`). Never run against a real provider yet.
+- Tests: 64 backend tests (`npm test` in `backend/`).
+
+Next steps: run one real listing with photos + plan through the new flow on the deployed backend; set `FAL_KEY` and try SAM 3D on one object; then the render-and-compare refinement loop above.
