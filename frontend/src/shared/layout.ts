@@ -26,6 +26,8 @@ export interface ListingFacts {
   areaSqM: number | null;
   propertyType?: string | null;
   description?: string | null;
+  /** Storeys, when known; otherwise guessed from the property type. */
+  floors?: number | null;
 }
 
 const CORRIDOR_M = 1.2;
@@ -40,13 +42,16 @@ const isHouse = (f: ListingFacts) => /house|terrace|semi|detached|cottage|townho
 export function roomListFromFacts(f: ListingFacts): RoomSpec[] {
   const beds = Math.max(0, Math.min(6, f.bedrooms ?? (f.areaSqM ? Math.round(f.areaSqM / 30) : 2)));
   const baths = Math.max(1, Math.min(4, f.bathrooms ?? Math.max(1, Math.round(beds / 2))));
-  const twoFloors = isHouse(f) && beds >= 2;
+  const twoFloors = f.floors != null ? f.floors >= 2 && beds >= 1 : isHouse(f) && beds >= 2;
   const rooms: RoomSpec[] = [];
   const up = twoFloors ? 1 : 0;
   if (beds === 0) rooms.push({ label: 'Studio', type: 'living', areaM2: 20, level: 0 });
   else if (twoFloors) {
     rooms.push({ label: 'Living Room', type: 'living', areaM2: 18, level: 0 }, { label: 'Kitchen / Diner', type: 'kitchen', areaM2: 14, level: 0 });
     if (baths >= 2) rooms.push({ label: 'WC', type: 'wc', areaM2: 2.5, level: 0 });
+  } else if (beds >= 2 && !/flat|apartment|condo|studio|maisonette/i.test(f.propertyType ?? '')) {
+    // Single-storey houses (bungalows, US single-family homes) usually have a separate kitchen; flats are often open-plan.
+    rooms.push({ label: 'Living Room', type: 'living', areaM2: 18, level: 0 }, { label: 'Kitchen', type: 'kitchen', areaM2: 10, level: 0 });
   } else {
     rooms.push({ label: 'Living / Kitchen', type: 'living', areaM2: 24, level: 0 });
   }

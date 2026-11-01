@@ -135,9 +135,11 @@ export class ImportFlow {
       <input class="field title-input" id="prop-title" value="${esc(p.address)}" aria-label="Property name" />
       <div class="row3">
         <label class="xs muted">Bedrooms<input class="field small" id="prop-beds" type="number" min="0" max="30" value="${p.bedrooms ?? ''}" /></label>
+        <label class="xs muted">Baths<input class="field small" id="prop-baths" type="number" min="0" max="20" step="0.5" value="${p.bathrooms ?? ''}" /></label>
+        <label class="xs muted">Floors<input class="field small" id="prop-floors" type="number" min="1" max="6" value="${p.floors ?? ''}" placeholder="?" /></label>
         <label class="xs muted">Area (m²)<input class="field small" id="prop-area" type="number" min="1" max="5000" value="${p.areaSqM ?? ''}" /></label>
-        <span class="xs faint" style="align-self:end">${esc(p.sourceInfo.attribution)}</span>
       </div>
+      <p class="xs faint">${esc(p.sourceInfo.attribution)}. Bedrooms, baths, floors and area shape the estimated layout when there is no floor plan.</p>
       ${ex ? `<p class="xs muted">Found ${ex.found} image(s) on the page (${ex.floorplans} floor plan) via ${esc(ex.adapter)}; ${ex.downloaded} imported${ex.failed.length ? `, ${ex.failed.length} couldn’t be downloaded` : ''}.</p>` : ''}
       ${planNote}
       <div class="review-actions">
@@ -324,7 +326,7 @@ export class ImportFlow {
     else if (el.dataset.mediaInclude) await this.patch(el.dataset.mediaInclude, { excluded: !el.checked });
     else if (el.dataset.mediaType) await this.patch(el.dataset.mediaType, { type: el.value as 'photo' | 'floorplan' });
     else if (el.dataset.mediaRoom) await this.patch(el.dataset.mediaRoom, { roomGuess: el.value.trim() || null }, true);
-    else if (['prop-title', 'prop-beds', 'prop-area'].includes(el.id)) await this.saveFacts();
+    else if (['prop-title', 'prop-beds', 'prop-baths', 'prop-floors', 'prop-area'].includes(el.id)) await this.saveFacts();
   }
 
   private async saveFacts() {
@@ -332,8 +334,12 @@ export class ImportFlow {
     const title = (document.getElementById('prop-title') as HTMLInputElement | null)?.value.trim();
     const beds = (document.getElementById('prop-beds') as HTMLInputElement | null)?.value;
     const area = (document.getElementById('prop-area') as HTMLInputElement | null)?.value;
-    const patch = { address: title || undefined, bedrooms: beds ? Number(beds) : null, areaSqM: area ? Number(area) : null };
-    if (patch.address === this.property.address && patch.bedrooms === this.property.bedrooms && patch.areaSqM === this.property.areaSqM) return;
+    const baths = (document.getElementById('prop-baths') as HTMLInputElement | null)?.value;
+    const floors = (document.getElementById('prop-floors') as HTMLInputElement | null)?.value;
+    const num = (v: string | undefined) => (v ? Number(v) : null);
+    const patch = { address: title || undefined, bedrooms: num(beds), bathrooms: num(baths), floors: num(floors), areaSqM: num(area) };
+    const p = this.property;
+    if (patch.address === p.address && patch.bedrooms === p.bedrooms && patch.areaSqM === p.areaSqM && patch.bathrooms === (p.bathrooms ?? null) && patch.floors === (p.floors ?? null)) return;
     this.property = (await api.updateProperty(this.property.id, patch)).property;
   }
 

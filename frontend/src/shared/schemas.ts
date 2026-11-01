@@ -57,6 +57,9 @@ export const Property = z.object({
   status: z.string(),
   price: z.object({ amount: z.number(), currency: z.string(), period: z.enum(['pcm', 'pw', 'sale']) }).nullable(),
   bedrooms: z.number().int().nullable(),
+  /** Optional: not every source gives these. Used for estimated layouts. */
+  bathrooms: z.number().nullable().optional(),
+  floors: z.number().int().min(1).max(6).nullable().optional(),
   areaSqM: z.number().nullable(),
   areaEvidence: z.string().nullable(),
   /** Listing text, when the source provides it (used as context for estimated layouts). */

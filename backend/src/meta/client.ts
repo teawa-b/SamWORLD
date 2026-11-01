@@ -62,7 +62,7 @@ export class AiBudget {
       .join(', ');
     return this.usage.calls
       ? `${this.usage.calls} Meta API calls (${models}); ${this.usage.inputTokens} input / ${this.usage.outputTokens} output tokens`
-      : 'No AI calls (fixture data only)';
+      : 'No AI calls';
   }
 }
 

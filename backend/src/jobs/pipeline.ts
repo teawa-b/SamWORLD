@@ -151,7 +151,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     interp = FloorplanInterpretation.parse(fixtureFile(property.sourceListingId, 'interpretation.fixture.json'));
     await ctx.log('parse', live ? 'No raster plan available for Muse; using the fixture reference interpretation' : 'Using the fixture reference interpretation (hand-authored stand-in for Muse Spark)', 'warn');
   } else {
-    const facts = { bedrooms: property.bedrooms, bathrooms: null, areaSqM: property.areaSqM, propertyType: property.status, description: property.description ?? null, address: property.address };
+    const facts = { bedrooms: property.bedrooms, bathrooms: property.bathrooms ?? null, floors: property.floors ?? null, areaSqM: property.areaSqM, propertyType: property.status, description: property.description ?? null, address: property.address };
     if (plans.length && !live) await ctx.log('parse', 'The floor plan can’t be read automatically without MODEL_API_KEY. Trace it in the plan editor (free, no AI) for a plan-accurate model; estimating the layout for now', 'warn');
     else if (!plans.length) await ctx.log('parse', 'No floor plan in this listing; estimating the layout', 'warn');
     if (live && photoData.length) {

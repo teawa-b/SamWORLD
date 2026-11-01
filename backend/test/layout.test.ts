@@ -22,6 +22,14 @@ describe('estimated layouts (no floor plan)', () => {
     expect(total).toBeLessThan(85);
   });
 
+  it('keeps a single-storey house on one floor with a separate kitchen when floors is given', () => {
+    const { structure, checks } = build({ bedrooms: 3, bathrooms: 2, areaSqM: 109, propertyType: 'Single Family Residence house', floors: 1 });
+    expect(structure.levels).toHaveLength(1);
+    expect(structure.rooms.map((r) => r.type).sort()).toEqual(['bathroom', 'bathroom', 'bedroom', 'bedroom', 'bedroom', 'hall', 'kitchen', 'living']);
+    expect(checks.filter((c) => c.severity === 'fail')).toEqual([]);
+    expect(checks.find((c) => c.id === 'connectivity')?.severity).toBe('pass');
+  });
+
   it('builds a two-floor house with stairs and every room reachable', () => {
     const { structure, checks } = build({ bedrooms: 3, bathrooms: 2, areaSqM: 110, propertyType: 'Semi-detached house' });
     expect(structure.levels).toHaveLength(2);

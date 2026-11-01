@@ -160,8 +160,8 @@ export class Panel {
     const el = document.getElementById('status-pill')!;
     el.hidden = false;
     const live = !!this.caps?.liveMeta && !staticMode;
-    el.innerHTML = `<span class="status-dot ${live ? 'live' : ''}"></span>${staticMode ? 'Offline demo' : live ? 'Live AI' : 'Demo data'}`;
-    el.title = staticMode ? 'API not reachable: showing pre-built scenes' : live ? `${this.caps!.museModel} · ${this.caps!.samModel}` : 'MODEL_API_KEY not set on the server: using demo data';
+    el.innerHTML = `<span class="status-dot ${live ? 'live' : ''}"></span>${staticMode ? 'Offline demo' : live ? 'Live AI' : 'AI off'}`;
+    el.title = staticMode ? 'API not reachable: showing pre-built scenes' : live ? `${this.caps!.museModel} · ${this.caps!.samModel}` : 'MODEL_API_KEY is not set on the server: no AI steps run (floor plans can be traced by hand)';
   }
 
   private go(v: View) {
@@ -386,8 +386,7 @@ export class Panel {
           <div class="meta"><span class="touch-only">Tap a white circle to move there. Drag to look around.</span><span class="desktop-only">Click a white circle to move there, drag to look, or use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>.</span></div></div>
         </div>
         <div class="walk-actions">
-          ${tool('level-up', 'up', 'Upstairs', false, '', lvlIdx >= s.structure.levels.length - 1 ? 'disabled' : '')}
-          ${tool('level-down', 'down', 'Downstairs', false, '', lvlIdx === 0 ? 'disabled' : '')}
+          ${s.structure.levels.length > 1 ? `${tool('level-up', 'up', 'Upstairs', false, '', lvlIdx >= s.structure.levels.length - 1 ? 'disabled' : '')}${tool('level-down', 'down', 'Downstairs', false, '', lvlIdx === 0 ? 'disabled' : '')}` : ''}
           ${tool('toggle', 'moon', 'Night', app.night.value, '', 'data-key="night"')}
           ${tool('toggle', 'sofa', 'Empty', app.furnitureHidden.value, '', 'data-key="furnitureHidden"')}
         </div>

@@ -75,7 +75,7 @@ export function hintFromName(name: string): { roomLabel: string | null; floorpla
   return { roomLabel: null, floorplan: false };
 }
 
-export function createUploadProperty(input: { title?: string | null; address?: string | null; listingUrl?: string | null; description?: string | null; bedrooms?: number | null; areaSqM?: number | null; price?: Property['price'] }, attribution: string): Property {
+export function createUploadProperty(input: { title?: string | null; address?: string | null; listingUrl?: string | null; description?: string | null; bedrooms?: number | null; bathrooms?: number | null; areaSqM?: number | null; price?: Property['price'] }, attribution: string): Property {
   const now = new Date().toISOString();
   const id = `prop-u-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`;
   return {
@@ -88,6 +88,7 @@ export function createUploadProperty(input: { title?: string | null; address?: s
     status: 'imported',
     price: input.price ?? null,
     bedrooms: input.bedrooms != null ? Math.round(input.bedrooms) : null,
+    bathrooms: input.bathrooms ?? null,
     areaSqM: input.areaSqM ?? null,
     areaEvidence: input.areaSqM ? 'Stated on the source page' : null,
     description: input.description ?? null,
@@ -198,7 +199,7 @@ export async function importFromListingUrl(
   const ordered: CandidateImage[] = [...ex.images.filter((i) => i.kind === 'floorplan'), ...ex.images.filter((i) => i.kind === 'photo')].slice(0, maxImages);
   const host = new URL(ex.sourceUrl).hostname.replace(/^www\./, '');
   const property = createUploadProperty(
-    { title: ex.title, address: ex.address ?? ex.title, listingUrl: ex.sourceUrl, description: ex.description, bedrooms: ex.bedrooms, areaSqM: ex.areaSqM, price: ex.price },
+    { title: ex.title, address: ex.address ?? ex.title, listingUrl: ex.sourceUrl, description: ex.description, bedrooms: ex.bedrooms, bathrooms: ex.bathrooms, areaSqM: ex.areaSqM, price: ex.price },
     `Imported from ${host} (public listing page)`,
   );
   property.sourceProvider = 'listing-url';
