@@ -9,7 +9,7 @@ import { resolveModels } from './meta/models.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 256 * 1024 });
-  await app.register(cors, { origin: config.corsOrigins, methods: ['GET', 'POST', 'PATCH'] });
+  await app.register(cors, { origin: config.corsOrigins, methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] });
   await registerRoutes(app);
   return app;
 }

@@ -11,27 +11,36 @@ import { app, floorsSeparated, resetBuilding, separateFloors } from '../state.js
 import { changeLevel, enterRoom, exitRoom } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
 import type { Sheet } from './sheet.js';
+import { ImportFlow } from './importer.js';
+import { PlanEditor } from './plan-editor.js';
+import { PhotoViewer } from './photos.js';
+import { Minimap } from './minimap.js';
+import { nudgeObject, removeObjectLocally, resetObject, sceneObject } from '../systems/objects.js';
 
 type Tab = 'explore' | 'rooms' | 'evidence';
 type View =
+  | { name: 'import' }
   | { name: 'discover' }
-  | { name: 'listing'; propertyId: string }
+  | { name: 'review'; propertyId: string }
   | { name: 'processing'; propertyId: string; jobId: string }
   | { name: 'explore'; propertyId: string; tab: Tab };
 
 const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-const STEPS: [ReconstructionRun['state'], string][] = [
-  ['INGESTED', 'Reading the listing'],
-  ['STRUCTURE_PARSED', 'Interpreting the floor plan'],
-  ['SHELL_BUILT', 'Building walls and floors'],
-  ['MEDIA_MATCHED', 'Matching photos to rooms'],
-  ['SEGMENTED', 'Finding furniture in photos'],
-  ['PLACED', 'Placing furniture'],
-  ['VERIFIED', 'Checking the result'],
-  ['READY', 'Ready to explore'],
+/** Run state reached, label, and the log step name its messages are filed under. */
+const STEPS: [ReconstructionRun['state'], string, string][] = [
+  ['INGESTED', 'Collecting photographs', 'ingest'],
+  ['STRUCTURE_PARSED', 'Analysing the floor plan', 'parse'],
+  ['SHELL_BUILT', 'Building room geometry', 'shell'],
+  ['MEDIA_MATCHED', 'Matching photographs to rooms', 'match'],
+  ['SEGMENTED', 'Finding furniture in photos', 'segment'],
+  ['PLACED', 'Preparing furniture', 'place'],
+  ['VERIFIED', 'Checking the result', 'verify'],
+  ['READY', 'Loading the 3D scene', 'done'],
 ];
+/** A finished step whose own log says it didn't really run is shown as skipped, with the reason. */
+const SKIPPED_RE = /skipped|not set|can’t be read|estimating the layout|failed|no photos supplied/i;
 
 const LAYOUT_LABELS: Record<string, string> = {
   floorplan: 'Listing floor plan',
@@ -45,7 +54,8 @@ const METHOD_LABELS: Record<string, string> = {
   'meta:muse-wonder-1.0': 'Meta Muse Wonder',
   'meta:sam-3.1': 'Meta SAM 3.1',
   'fixture:hand-authored': 'Demo data (no live AI)',
-  'admin-correction': 'Manual correction',
+  'admin-correction': 'Traced / corrected by hand',
+  'modal:sam-3d-objects': 'SAM 3D Objects',
   deterministic: 'Geometry engine',
 };
 
@@ -62,7 +72,12 @@ function roomEvidence(r: Room): { cls: string; text: string; color: string } {
 
 export class Panel {
   private body: HTMLElement;
-  private view: View = { name: 'discover' };
+  private view: View = { name: 'import' };
+  private flow: ImportFlow;
+  private photos: PhotoViewer;
+  private minimap: Minimap;
+  private sam3dReason = '';
+  private objectJob: string | null = null;
   private caps: Capabilities | null = null;
   private realtyNotice = '';
   private property: Property | null = null;
@@ -89,11 +104,38 @@ export class Panel {
     private sheet: Sheet,
   ) {
     this.body = root.querySelector('#panel-body') as HTMLElement;
+    this.flow = new ImportFlow({
+      toast: (m) => this.toast(m),
+      rerender: () => (this.view.name === 'import' || this.view.name === 'review') && this.renderKeepScroll(),
+      openReview: (id) => this.openProperty(id),
+      startBuild: (id) => this.build(id),
+      openPlanEditor: (id) => this.openPlanEditor(id),
+      openDiscover: () => this.go({ name: 'discover' }),
+      caps: () => this.caps,
+    });
+    this.photos = new PhotoViewer((roomId) => {
+      app.selectedRoomId.value = roomId;
+      enterRoom(this.world, roomId);
+    });
+    this.minimap = new Minimap(world);
+    // Drag and drop images onto the import / review screens.
+    this.body.addEventListener('dragover', (e) => {
+      if (this.view.name === 'import' || this.view.name === 'review') {
+        e.preventDefault();
+        this.body.querySelector('#drop-zone')?.classList.add('over');
+      }
+    });
+    this.body.addEventListener('dragleave', () => this.body.querySelector('#drop-zone')?.classList.remove('over'));
+    this.body.addEventListener('drop', (e) => {
+      if (this.view.name !== 'import' && this.view.name !== 'review') return;
+      e.preventDefault();
+      void this.flow.addFiles([...(e.dataTransfer?.files ?? [])]);
+    });
     document.addEventListener('click', (e) => this.onClick(e));
     this.body.addEventListener('submit', (e) => this.onSubmit(e));
     this.body.addEventListener('change', (e) => this.onChange(e));
     window.addEventListener('keydown', (e) => this.onKey(e));
-    for (const s of [app.selectedRoomId, app.mode, app.levelLift, app.roofHidden, app.wallsHidden, app.furnitureHidden, app.night, app.evidenceView, app.wallMode, app.pulledWalls, app.walkLevelId]) {
+    for (const s of [app.selectedRoomId, app.mode, app.levelLift, app.roofHidden, app.wallsHidden, app.furnitureHidden, app.night, app.evidenceView, app.wallMode, app.pulledWalls, app.walkLevelId, app.selectedObjectId, app.hiddenObjectIds, app.objectEdits]) {
       s.subscribe(() => this.view.name === 'explore' && this.view.tab === 'explore' && this.render());
     }
     // Selecting a room in 3D opens the sheet enough to show it.
@@ -108,9 +150,10 @@ export class Panel {
     this.caps = h?.capabilities ?? null;
     this.realtyNotice = h?.realtyApi.available === false ? h.realtyApi.reason : '';
     this.renderStatus();
+    if (!staticMode) this.sam3dReason = (await api.sam3dStatus().catch(() => ({ reason: '' }))).reason;
     const pid = new URLSearchParams(location.search).get('property');
-    if (pid) await this.openProperty(pid, true).catch(() => this.go({ name: 'discover' }));
-    else this.go({ name: 'discover' });
+    if (pid) await this.openProperty(pid, true).catch(() => this.go({ name: 'import' }));
+    else this.go({ name: 'import' });
   }
 
   private renderStatus() {
@@ -127,8 +170,10 @@ export class Panel {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    this.sheet.set(v.name === 'listing' ? 'full' : 'half');
-    this.globe?.show(v.name === 'discover' || v.name === 'listing');
+    this.sheet.set(v.name === 'review' || v.name === 'import' ? 'full' : 'half');
+    this.globe?.show(v.name === 'discover');
+    document.body.classList.toggle('wide-panel', v.name === 'import' || v.name === 'review');
+    this.minimap.show(v.name === 'explore' || v.name === 'processing');
     this.render();
     this.body.scrollTop = 0;
   }
@@ -139,7 +184,22 @@ export class Panel {
     const brand = `<div class="desktop-brand"><span class="logo">${icon('roof', 18)}</span>WalkIn</div>`;
     this.body.innerHTML =
       brand +
-      (v.name === 'discover' ? this.renderDiscover() : v.name === 'listing' ? this.renderListing() : v.name === 'processing' ? this.renderProcessing() : this.renderExplore(v.tab));
+      (v.name === 'import'
+        ? this.flow.renderImport(this.results.map((r) => this.resultCard(r)).join(''))
+        : v.name === 'discover'
+          ? this.renderDiscover()
+          : v.name === 'review'
+            ? this.flow.renderReview()
+            : v.name === 'processing'
+              ? this.renderProcessing()
+              : this.renderExplore(v.tab));
+  }
+
+  /** Re-render without jumping to the top (review edits). */
+  private renderKeepScroll() {
+    const y = this.body.scrollTop;
+    this.render();
+    this.body.scrollTop = y;
   }
 
   private renderDiscover() {
@@ -152,8 +212,9 @@ export class Panel {
           ? `<div class="callout info">${icon('info')}<div>${esc(this.nearNotice)}</div></div>`
           : '';
     return `
-      ${this.nearPlace ? '' : `<div class="eyebrow">WalkIn</div><h1>Find a home, then walk through it</h1>
-      <p class="lede">Tap the map or use your location to see listings nearby, then explore any of them in 3D on your phone, computer or Meta Quest.</p>`}
+      <div class="view-head"><button class="icon-btn" data-action="home" aria-label="Back">${icon('back')}</button><div class="grow"><div class="sub">Browse listings</div></div></div>
+      ${this.nearPlace ? '' : `<h1>Find a listing on the map</h1>
+      <p class="lede">Tap the map or use your location to see listings nearby, then open one to review its photos and floor plan.</p>`}
       <div class="search-row">
         <form id="search-form" class="search" role="search">
           ${icon('search')}
@@ -264,40 +325,6 @@ export class Panel {
     if (this.view.name === 'discover') this.render();
   }
 
-  private renderListing() {
-    const p = this.property;
-    if (!p) return '<div class="empty">Loading…</div>';
-    const plans = this.media.filter((m) => m.type === 'floorplan');
-    const photos = this.media.filter((m) => m.type === 'photo');
-    return `
-      <div class="view-head">
-        <button class="icon-btn" data-action="back" aria-label="Back">${icon('back')}</button>
-        <div class="grow"><div class="sub">${esc(p.status === 'to-let' ? 'To let' : p.status)}</div></div>
-      </div>
-      <h2>${esc(p.address)}</h2>
-      <div class="facts">
-        <div class="fact">${icon('door', 16)}<b>${esc(price(p.price))}</b><span>${p.price?.period === 'pcm' ? 'per month' : 'price'}</span></div>
-        <div class="fact">${icon('bed', 16)}<b>${p.bedrooms ?? '—'}</b><span>bedrooms</span></div>
-        <div class="fact">${icon('area', 16)}<b>${p.areaSqM ?? '—'}</b><span>m²</span></div>
-        <div class="fact">${icon('photo', 16)}<b>${photos.length}</b><span>photos</span></div>
-      </div>
-      <h3>Floor plans</h3>
-      ${
-        plans.length
-          ? `<div class="scroller plans">${plans.map((m, i) => `<a class="plan" href="${esc(mediaUrl(m))}" target="_blank" rel="noopener"><figure><img src="${esc(mediaUrl(m))}" alt="Floor plan" /><figcaption>${esc(m.levelGuess === 'L0' ? 'Ground floor' : m.levelGuess === 'L1' ? 'First floor' : `Plan ${i + 1}`)}</figcaption></figure></a>`).join('')}</div>`
-          : `<div class="callout">${icon('info')}<div><b>No floor plan in this listing.</b> ${photos.length ? 'WalkIn will look for a plan among the photos, and otherwise read the rooms from the photos and arrange an estimated layout.' : 'WalkIn will arrange an estimated layout from the bedrooms, bathrooms and area.'} Room positions will be marked as estimated.</div></div>`
-      }
-      <h3>Photos</h3>
-      ${photos.length ? `<div class="scroller plans">${photos.map((m) => `<figure class="plan"><img src="${esc(mediaUrl(m))}" alt="Listing photo" /></figure>`).join('')}</div>` : `<div class="empty">${icon('photo', 22)}<br />No photos yet. Rooms will be marked as having no photo evidence.</div>`}
-      ${p.missingData.length ? `<div class="callout">${icon('info')}<div><b>Not in this listing</b><ul>${p.missingData.map((m) => `<li>${esc(m.split(' — ')[0])}</li>`).join('')}</ul></div></div>` : ''}
-      <p class="xs faint">${esc(p.sourceInfo.attribution)}. ${esc(p.sourceInfo.rightsNote)}</p>
-      <div class="sticky-cta">
-        ${staticMode ? '' : `<button class="btn primary block" data-action="reconstruct">${icon('cube')}Explore in 3D</button>`}
-        <button class="btn block ghost" data-action="open-scene" id="open-cached" hidden>Open saved 3D model</button>
-        <p class="xs faint" style="text-align:center;margin:8px 0 0">AI reconstruction · dimensions are approximate</p>
-      </div>`;
-  }
-
   private renderProcessing() {
     return `
       <div class="eyebrow">Building</div>
@@ -308,9 +335,13 @@ export class Panel {
   private renderJob(run: ReconstructionRun) {
     const reached = STEPS.findIndex(([s]) => s === run.state);
     const failed = run.state === 'FAILED';
-    const steps = STEPS.map(([s, label], i) => {
-      const cls = run.state === 'READY' || i < reached ? 'done' : failed && i === reached + 1 ? 'failed' : i === reached + 1 || (i === 0 && reached < 0 && !failed) ? 'active' : '';
-      return `<li class="${cls}"><span class="badge">${cls === 'done' ? icon('check', 14) : cls === 'failed' ? icon('close', 14) : ''}</span>${esc(label)}</li>`;
+    const steps = STEPS.map(([s, label, key], i) => {
+      let cls = run.state === 'READY' || i <= reached ? 'done' : failed && i === reached + 1 ? 'failed' : i === reached + 1 || (i === 0 && reached < 0 && !failed) ? 'active' : '';
+      const warn = run.logs.filter((l) => l.step === key && l.level !== 'info').pop();
+      if (cls === 'done' && warn && SKIPPED_RE.test(warn.message)) cls = 'skipped';
+      const last = run.logs.filter((l) => l.step === key).pop();
+      const note = cls === 'skipped' ? warn!.message : cls === 'active' || cls === 'failed' ? (failed ? run.errorMessage : last?.message) : '';
+      return `<li class="${cls}"><span class="badge">${cls === 'done' ? icon('check', 14) : cls === 'failed' ? icon('close', 14) : cls === 'skipped' ? '–' : ''}</span><div>${esc(label)}${cls === 'skipped' ? ' <span class="tag">skipped</span>' : ''}${note ? `<div class="xs muted">${esc(note)}</div>` : ''}</div></li>`;
     }).join('');
     const logs = run.logs
       .slice(-30)
@@ -319,7 +350,7 @@ export class Panel {
     return `
       <div class="progress"><div style="width:${Math.max(2, Math.round(run.progress * 100))}%"></div></div>
       <p class="small muted">${failed ? '' : run.totalCostEstimate || 'No AI calls yet'}</p>
-      ${failed ? `<div class="callout">${icon('alert')}<div><b>Something went wrong.</b> ${esc(run.errorMessage)}</div></div><button class="btn block" data-action="back-listing">Back to listing</button>` : ''}
+      ${failed ? `<div class="callout">${icon('alert')}<div><b>Something went wrong.</b> ${esc(run.errorMessage)}</div></div><button class="btn block" data-action="back-listing">Back to the media</button><p class="xs faint">The property and its images are kept; fix the problem and generate again.</p>` : ''}
       <ul class="steps">${steps}</ul>
       ${['SHELL_BUILT', 'MEDIA_MATCHED', 'SEGMENTED', 'PLACED', 'VERIFIED'].includes(run.state) ? `<div class="hint">${icon('cube')}The walls are already up in the 3D view. Furniture is on its way.</div>` : ''}
       <details><summary>Technical log <span class="faint">${run.logs.length}</span></summary><ul class="logs">${logs}</ul></details>`;
@@ -331,7 +362,7 @@ export class Panel {
     const walking = app.mode.value === 'walk';
     return `
       <div class="view-head">
-        <button class="icon-btn" data-action="back-listing" aria-label="Back">${icon('back')}</button>
+        <button class="icon-btn" data-action="back-listing" aria-label="Back to media" title="Back to media">${icon('back')}</button>
         <div class="grow"><h2 class="truncate" style="font-size:17px">${esc(s.property.address)}</h2><div class="sub">${s.structure.levels.length} floors · ${s.structure.rooms.length} rooms${estimatedLayout(s) ? ' · <span class="badge-est">estimated layout</span>' : ''}</div></div>
       </div>
       ${walking ? '' : `<div class="segmented" role="tablist">${(['explore', 'rooms', 'evidence'] as const).map((t) => `<button role="tab" data-action="tab" data-tab="${t}" class="${t === tab ? 'active' : ''}">${{ explore: 'Explore', rooms: 'Rooms', evidence: 'How it’s built' }[t]}</button>`).join('')}</div>`}
@@ -347,6 +378,7 @@ export class Panel {
 
     if (walking) {
       const level = s.structure.levels.find((l) => l.id === app.walkLevelId.value);
+      const here = s.structure.rooms.find((r) => r.id === app.selectedRoomId.value && r.levelId === app.walkLevelId.value);
       const lvlIdx = level?.index ?? 0;
       return `
         <div class="room-card card">
@@ -359,6 +391,8 @@ export class Panel {
           ${tool('toggle', 'moon', 'Night', app.night.value, '', 'data-key="night"')}
           ${tool('toggle', 'sofa', 'Empty', app.furnitureHidden.value, '', 'data-key="furnitureHidden"')}
         </div>
+        ${here ? `<div class="level-label">Photos of ${esc(here.label)}</div>${this.photoStrip(s, here.id)}` : ''}
+        ${this.objectBlock(s)}
         <button class="btn primary block" style="margin-top:12px" data-action="exit-room">${icon('cube')}Back to dollhouse <kbd>Esc</kbd></button>`;
     }
 
@@ -369,11 +403,12 @@ export class Panel {
             <div class="grow"><div class="name truncate">${esc(room.label)}</div>
             <div class="meta">${room.areaSqM.toFixed(1)} m² · <span class="tag ${ev.cls}">${ev.text}</span></div></div>
             <button class="btn primary" data-action="enter-room">${icon('walk')}Walk in</button>
-          </div>`;
+          </div>${this.photoStrip(s, room.id)}`;
         })()
       : `<div class="hint">${icon('door')}<span>Tap a floor in the model, or pick a room below, then walk in.</span></div>`;
 
     return `
+      ${this.objectBlock(s)}
       ${roomBlock}
       <div class="scroller tools-grid">
         ${tool('separate', 'layers', 'Floors', floorsSeparated(), '1')}
@@ -396,7 +431,7 @@ export class Panel {
           .join('')}</div>`,
         )
         .join('')}
-      <p class="xs faint" style="margin-top:16px"><span class="touch-only">Drag to orbit · pinch to zoom.</span><span class="desktop-only">Drag to orbit · scroll to zoom.</span> In a Quest headset, tap VR to grab, scale and pull the house apart with your hands.</p>`;
+      <p class="xs faint" style="margin-top:16px"><span class="touch-only">Drag to orbit · pinch to zoom.</span><span class="desktop-only">Drag to orbit · scroll to zoom · click furniture to select it.</span></p>`;
   }
 
   private renderRooms(s: SceneManifest) {
@@ -424,6 +459,7 @@ export class Panel {
     const measured = s.structure.rooms.filter((r) => r.dimensionsMeasured);
     return `
       <p class="small muted" style="margin-top:14px">Fix anything the AI got wrong, then rebuild. The floor plan isn’t re-read, so rebuilding is quick and free.</p>
+      ${!staticMode && s.media.some((m) => m.type === 'floorplan') ? `<button class="btn block" data-action="edit-plan">${icon('plan')}Edit room shapes, doors and sizes on the plan</button>` : ''}
       ${rows}
       <h3>Photos → rooms</h3>
       ${mappings || '<div class="empty">No photos in this listing.</div>'}
@@ -488,18 +524,20 @@ export class Panel {
       this.go({ name: 'explore', propertyId, tab: 'explore' });
       return;
     }
-    const [{ property, latestRun, hasScene }, { media }] = await Promise.all([api.property(propertyId), api.media(propertyId)]);
+    const [{ property, latestRun, hasScene }] = await Promise.all([api.property(propertyId), this.flow.load(propertyId)]);
     this.property = property;
-    this.media = media;
+    this.media = this.flow.media;
     history.replaceState(null, '', `?property=${encodeURIComponent(propertyId)}`);
     if (latestRun && !['READY', 'FAILED'].includes(latestRun.state)) return this.watchJob(propertyId, latestRun.id);
     if (preferScene && hasScene) {
       await this.loadScene(propertyId);
       return this.go({ name: 'explore', propertyId, tab: 'explore' });
     }
-    this.go({ name: 'listing', propertyId });
-    const btn = this.body.querySelector('#open-cached') as HTMLButtonElement | null;
-    if (btn && hasScene) btn.hidden = false;
+    this.go({ name: 'review', propertyId });
+    if (hasScene) {
+      const cta = this.body.querySelector('.sticky-cta');
+      cta?.insertAdjacentHTML('beforeend', `<button class="btn block ghost" data-action="open-scene" style="margin-top:8px">Open the last 3D model</button>`);
+    }
   }
 
   private async loadScene(propertyId: string) {
@@ -546,6 +584,10 @@ export class Panel {
   }
 
   private async onSubmit(e: Event) {
+    if ((e.target as HTMLElement).id === 'import-url-form') {
+      e.preventDefault();
+      return this.flow.importUrl((this.body.querySelector('#listing-url') as HTMLInputElement).value.trim());
+    }
     if ((e.target as HTMLElement).id !== 'search-form') return;
     e.preventDefault();
     const input = this.body.querySelector('#q') as HTMLInputElement;
@@ -561,7 +603,9 @@ export class Panel {
     }
   }
 
-  private onChange(_e: Event) {}
+  private onChange(e: Event) {
+    if (this.view.name === 'import' || this.view.name === 'review') void this.flow.onChange(e.target as HTMLElement).catch((err) => this.toast((err as Error).message));
+  }
 
   private async onClick(e: Event) {
     const t = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
@@ -570,20 +614,30 @@ export class Panel {
     const v = this.view;
     const pid = 'propertyId' in v ? v.propertyId : '';
     try {
+      if ((this.view.name === 'import' || this.view.name === 'review') && (await this.flow.handle(a, t))) {
+        e.preventDefault();
+        return;
+      }
       switch (a) {
         case 'home':
           this.nearPlace = null;
           this.nearby = [];
           this.nearNotice = null;
           this.globe?.clear();
-        // fall through
+          if (app.mode.value === 'walk') exitRoom(this.world);
+          history.replaceState(null, '', location.pathname);
+          this.flow.reset();
+          app.scene.value = null;
+          this.go({ name: 'import' });
+          return void this.loadResults('');
         case 'back':
           if (app.mode.value === 'walk') exitRoom(this.world);
           history.replaceState(null, '', location.pathname);
           this.go({ name: 'discover' });
           return void this.loadResults(this.query);
         case 'back-listing':
-          if (staticMode) return this.go({ name: 'discover' });
+          if (staticMode) return this.go({ name: 'import' });
+          if (app.mode.value === 'walk') exitRoom(this.world);
           return this.openProperty(pid);
         case 'locate':
           return this.locate();
@@ -598,11 +652,45 @@ export class Panel {
           const { property } = await api.importListing(t.dataset.provider!, t.dataset.listing!);
           return this.openProperty(property.id);
         }
-        case 'reconstruct': {
+        case 'reconstruct':
           (t as HTMLButtonElement).disabled = true;
-          const { jobId } = await api.reconstruct(pid);
-          return this.watchJob(pid, jobId);
+          return this.build(pid);
+        case 'open-photo': {
+          const s = app.scene.value;
+          if (!s) return;
+          const ids = t.dataset.room ? s.structure.rooms.find((r) => r.id === t.dataset.room)?.linkedMediaIds ?? [] : s.media.filter((m) => m.type === 'photo').map((m) => m.id);
+          return this.photos.open(s, ids, Math.max(0, ids.indexOf(t.dataset.mid ?? '')));
         }
+        case 'edit-plan':
+          if (this.view.name === 'explore') return this.openPlanEditor(pid);
+          break;
+        case 'obj-close':
+          app.selectedObjectId.value = null;
+          return;
+        case 'obj-move':
+          return nudgeObject(this.world, t.dataset.id!, Number(t.dataset.dx ?? 0), Number(t.dataset.dz ?? 0));
+        case 'obj-rot':
+          return nudgeObject(this.world, t.dataset.id!, 0, 0, Number(t.dataset.r));
+        case 'obj-reset':
+          return resetObject(this.world, t.dataset.id!);
+        case 'obj-hide': {
+          const id = t.dataset.id!;
+          const cur = app.hiddenObjectIds.value;
+          app.hiddenObjectIds.value = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+          return;
+        }
+        case 'obj-save':
+          return this.saveObjectEdits(pid);
+        case 'obj-remove': {
+          const o = sceneObject(t.dataset.id!);
+          if (!o || !confirm(`Remove the ${o.kind} from the model? You can bring it back by rebuilding after clearing corrections.`)) return;
+          await api.saveObjects(pid, [{ id: o.id, removed: true }]);
+          removeObjectLocally(this.world, o.id);
+          app.scene.value!.objects = app.scene.value!.objects.filter((x) => x.id !== o.id);
+          return this.toast(`${o.kind} removed and saved.`);
+        }
+        case 'obj-sam3d':
+          return this.requestSam3d(pid, t.dataset.id!);
         case 'open-scene':
           await this.loadScene(pid);
           return this.go({ name: 'explore', propertyId: pid, tab: 'explore' });
@@ -676,11 +764,139 @@ export class Panel {
       if (k === 'escape') exitRoom(this.world);
       return;
     }
+    const sel = app.selectedObjectId.value;
+    if (sel && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown', '[', ']'].includes(k)) {
+      e.preventDefault();
+      const step = e.shiftKey ? 0.5 : 0.1;
+      if (k === '[' || k === ']') return nudgeObject(this.world, sel, 0, 0, ((k === '[' ? 1 : -1) * Math.PI) / 12);
+      return nudgeObject(this.world, sel, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0);
+    }
+    if (sel && k === 'escape') return void (app.selectedObjectId.value = null);
     const toggles: Record<string, 'roofHidden' | 'wallsHidden' | 'furnitureHidden' | 'night' | 'evidenceView' | 'wallMode'> = { h: 'roofHidden', w: 'wallsHidden', f: 'furnitureHidden', n: 'night', v: 'evidenceView', p: 'wallMode' };
     if (toggles[k]) app[toggles[k]].value = !app[toggles[k]].value;
     else if (k === '1') separateFloors(!floorsSeparated());
     else if (k === 'r') resetBuilding();
     else if (k === 'e' && app.selectedRoomId.value) enterRoom(this.world, app.selectedRoomId.value);
+  }
+
+  private async build(pid: string) {
+    const { jobId } = await api.reconstruct(pid);
+    this.watchJob(pid, jobId);
+  }
+
+  private openPlanEditor(pid: string) {
+    const media = this.view.name === 'explore' && app.scene.value ? app.scene.value.media : this.flow.media;
+    const ed = new PlanEditor(
+      pid,
+      media,
+      async (saved, rebuild) => {
+        if (!saved) return;
+        await this.flow.load(pid).catch(() => undefined);
+        if (rebuild) await this.build(pid);
+        else {
+          this.toast('Floor plan saved. Generate 3D to see it.');
+          if (this.view.name === 'review') this.renderKeepScroll();
+        }
+      },
+      (m) => this.toast(m),
+    );
+    void ed.open().catch((e) => {
+      ed.close();
+      this.toast((e as Error).message);
+    });
+  }
+
+  /** Thumbnails of the photos matched to a room; click to compare with the model. */
+  private photoStrip(s: SceneManifest, roomId: string) {
+    const room = s.structure.rooms.find((r) => r.id === roomId);
+    const ms = (room?.linkedMediaIds ?? []).map((id) => s.media.find((m) => m.id === id)).filter((m): m is PropertyMedia => !!m);
+    if (!ms.length) return `<p class="xs faint">No listing photo shows this room; its look and furniture are typical for the room type, not observed.</p>`;
+    return `<div class="scroller photo-strip">${ms.map((m) => `<button class="thumb-btn" data-action="open-photo" data-mid="${esc(m.id)}" data-room="${esc(roomId)}" aria-label="Open photo"><img src="${esc(mediaUrl(m))}" alt="" loading="lazy" /></button>`).join('')}</div>`;
+  }
+
+  /** The selected piece of furniture: what it is, where it came from, and controls. */
+  private objectBlock(s: SceneManifest) {
+    const o = sceneObject(app.selectedObjectId.value);
+    if (!o) return '';
+    const hidden = app.hiddenObjectIds.value.includes(o.id);
+    const edited = !!app.objectEdits.value[o.id];
+    const typical = o.placementNotes.some((n) => n.startsWith('Typical '));
+    const what =
+      o.reconstructionMethod === 'sam3d'
+        ? o.modelFormat === 'ply-splat'
+          ? { cls: 'ok', text: 'SAM 3D splat', note: 'Reconstructed from a photo by SAM 3D Objects. Shown as a point cloud — a Gaussian splat is not an editable mesh. Size and position are estimates.' }
+          : { cls: 'ok', text: 'SAM 3D mesh', note: 'Reconstructed from a photo by SAM 3D Objects, scaled to the estimated size.' }
+        : typical
+          ? { cls: 'bad', text: 'Typical, not seen', note: 'No photo shows this; it is typical furniture for the room type. Simple stand-in shape.' }
+          : o.provenance.method === 'admin-correction' && o.provenance.note?.includes('fixture')
+            ? { cls: 'warn', text: 'Demo data', note: 'Hand-authored demo placement. Simple stand-in shape.' }
+            : o.sourceMediaIds.length
+              ? { cls: 'warn', text: 'Seen in a photo', note: 'Identified in a listing photo. Shown as a simple stand-in shape with an estimated size and position, not an exact copy.' }
+              : { cls: 'warn', text: 'Approximate', note: 'Simple stand-in shape; size and position are estimates.' };
+    const room = s.structure.rooms.find((r) => r.id === o.roomId);
+    const photos = o.sourceMediaIds.map((id) => s.media.find((m) => m.id === id)).filter((m): m is PropertyMedia => !!m);
+    const dets = s.detections.filter((d) => o.sourceMediaIds.includes(d.mediaId));
+    const btn = (action: string, label: string, extra = '') => `<button class="btn small" data-action="${action}" data-id="${esc(o.id)}" ${extra}>${label}</button>`;
+    const pad = (dx: number, dz: number, lbl: string) => `<button class="icon-btn s" data-action="obj-move" data-id="${esc(o.id)}" data-dx="${dx}" data-dz="${dz}" aria-label="Move ${lbl}">${lbl}</button>`;
+    const sam3d = this.caps?.sam3d
+      ? dets.length
+        ? `<div class="xs muted" style="margin-top:8px">Rebuild this item from a photo with SAM 3D (${esc(this.caps.sam3dProvider ?? '')}). Pick the outline to use:</div>
+           <div class="dets small">${dets.slice(0, 6).map((d, i) => { const m = s.media.find((x) => x.id === d.mediaId); return m ? `<label class="det"><input type="radio" name="sam3d-det" value="${esc(d.id)}" ${i === 0 ? 'checked' : ''} /><img src="${esc(mediaUrl(m))}" alt="" /><span class="box" style="left:${d.box[0] * 100}%;top:${d.box[1] * 100}%;width:${(d.box[2] - d.box[0]) * 100}%;height:${(d.box[3] - d.box[1]) * 100}%"></span><span class="cap">${esc(d.concept)}</span></label>` : ''; }).join('')}</div>
+           ${btn('obj-sam3d', `${icon('sparkle', 14)}${this.objectJob ? 'Reconstructing…' : o.reconstructionMethod === 'sam3d' ? 'Regenerate with SAM 3D' : 'Reconstruct with SAM 3D'}`, this.objectJob ? 'disabled' : '')} <span class="xs faint">paid inference · asks first</span>`
+        : `<p class="xs faint" style="margin-top:8px">SAM 3D needs a SAM 3.1 outline of this item from a photo; none exists yet (segmentation runs during a live AI build).</p>`
+      : `<p class="xs faint" style="margin-top:8px">3D reconstruction (SAM 3D) is off on this server${this.sam3dReason ? `: ${esc(this.sam3dReason)}` : '.'}</p>`;
+    return `<div class="card obj-card">
+      <div class="obj-top"><b>${esc(o.kind.replace(/-/g, ' '))}</b><span class="tag ${what.cls}">${what.text}</span><span class="grow"></span><button class="icon-btn s" data-action="obj-close" aria-label="Deselect">${icon('close', 14)}</button></div>
+      <p class="xs muted">${esc(room?.label ?? '')} · ${o.sizeM.map((v) => v.toFixed(2)).join(' × ')} m (estimated) · placement ${Math.round(o.placementConfidence * 100)}% confident</p>
+      <p class="xs">${esc(what.note)}</p>
+      ${photos.length ? `<div class="scroller photo-strip">${photos.map((m) => `<button class="thumb-btn" data-action="open-photo" data-mid="${esc(m.id)}" data-room="${esc(o.roomId)}"><img src="${esc(mediaUrl(m))}" alt="" /></button>`).join('')}</div>` : ''}
+      <div class="obj-tools">
+        <div class="dpad">${pad(0, -0.1, '↑')}<div>${pad(-0.1, 0, '←')}${pad(0.1, 0, '→')}</div>${pad(0, 0.1, '↓')}</div>
+        <div class="obj-btns">
+          ${btn('obj-rot', `${icon('rotate', 14)}−15°`, `data-r="${Math.PI / 12}"`)}${btn('obj-rot', `${icon('rotate', 14)}+15°`, `data-r="${-Math.PI / 12}"`)}
+          ${btn('obj-hide', hidden ? 'Show' : 'Hide')}${btn('obj-remove', 'Remove')}
+          ${edited ? `${btn('obj-reset', 'Undo move')}${staticMode ? '' : btn('obj-save', `${icon('check', 14)}Save`, 'data-primary')}` : ''}
+        </div>
+      </div>
+      <p class="xs faint desktop-only">Arrow keys move 10 cm (Shift: 50 cm), [ and ] turn. Hiding only affects this browser.</p>
+      ${staticMode ? '' : sam3d}
+    </div>`;
+  }
+
+  private async saveObjectEdits(pid: string) {
+    const edits = app.objectEdits.value;
+    const list = Object.entries(edits).map(([id, e]) => ({ id, positionXZ: [e.x, e.z] as [number, number], rotationY: e.rotationY }));
+    if (!list.length) return;
+    await api.saveObjects(pid, list);
+    // Keep the loaded scene in step without rebuilding the house.
+    for (const o of app.scene.value!.objects) {
+      const e = edits[o.id];
+      if (e) {
+        o.positionXYZ = [e.x, o.positionXYZ[1], e.z];
+        o.rotationY = e.rotationY;
+      }
+    }
+    app.objectEdits.value = {};
+    this.toast(`Saved ${list.length} change(s). They are kept when the model is rebuilt.`);
+  }
+
+  private async requestSam3d(pid: string, objectId: string) {
+    const o = sceneObject(objectId);
+    const det = (this.body.querySelector('input[name="sam3d-det"]:checked') as HTMLInputElement | null)?.value;
+    if (!o || !det) return;
+    if (!confirm(`Send this ${o.kind} to SAM 3D (${this.caps?.sam3dProvider ?? 'GPU'})? This is paid inference on your account. Results are cached, so the same request is never billed twice.`)) return;
+    const { job } = await api.reconstructObject(pid, objectId, det);
+    this.objectJob = job.id;
+    this.render();
+    const poll = async () => {
+      const j = await api.objectJob(job.id).catch(() => null);
+      if (j && j.state === 'running') return void setTimeout(poll, 3000);
+      this.objectJob = null;
+      this.toast(j?.message ?? 'SAM 3D request ended.');
+      if (j?.state === 'done') await this.loadScene(pid);
+      else this.render();
+    };
+    setTimeout(poll, 2000);
   }
 
   private toast(msg: string) {

@@ -22,7 +22,8 @@ import { AiBudget, museJson, type JsonSchema } from './client.js';
 
 export const PROMPT_VERSIONS = {
   floorplan: 'floorplan-v1',
-  photoMatch: 'photo-match-v1',
+  photoMatch: 'photo-match-v2',
+  classifyPhotos: 'classify-photos-v1',
   placement: 'placement-v1',
   planReview: 'plan-review-v1',
   surfaces: 'surfaces-v1',
@@ -254,7 +255,10 @@ export async function matchPhotosToRooms(opts: {
   photos: { mediaId: string; dataUrl: string }[];
   structure: Structure;
   planImages: string[];
+  /** Free-text room labels the user typed on the review screen, by photo index. Hints, not truth. */
+  userLabels?: Record<number, string | null>;
 }): Promise<{ matches: MediaRoomMatch[]; visibleObjects: Record<string, string[]> }> {
+  const hints = Object.entries(opts.userLabels ?? {}).filter(([, l]) => l);
   const roomList = opts.structure.rooms
     .map((r) => {
       const lvl = opts.structure.levels.find((l) => l.id === r.levelId)!;
@@ -265,7 +269,7 @@ export async function matchPhotosToRooms(opts: {
     budget: opts.budget,
     system:
       'You match listing photos to rooms of a floor plan. Use room type, windows, doors, fixtures and visible connections. If a photo fits no room (exterior, street, unclear), return roomId null. Never claim a room was photographed without visual evidence. visibleObjects: every piece of furniture and every appliance you can see, as short singular noun phrases (e.g. "sofa", "bed", "chest of drawers", "oven", "washing machine", "basin", "fireplace").',
-    text: `The first ${opts.planImages.length} image(s) are the floor plans. The next ${opts.photos.length} image(s) are listing photos, numbered from 0.\nRooms:\n${roomList}\nReturn one entry per photo.`,
+    text: `The first ${opts.planImages.length} image(s) are the floor plans. The next ${opts.photos.length} image(s) are listing photos, numbered from 0.\nRooms:\n${roomList}\n${hints.length ? `The user labelled some photos (hints; trust the picture if it clearly disagrees, and photos with the same label usually show the same room):\n${hints.map(([i, l]) => `- photo ${i}: "${String(l).slice(0, 60)}"`).join('\n')}\n` : ''}Several photos often show the same room from different angles: give them the same roomId. Return one entry per photo.`,
     images: [...opts.planImages, ...opts.photos.map((p) => p.dataUrl)],
     schemaName: 'photo_room_matches',
     schema: matchSchema,
@@ -537,4 +541,55 @@ function clamp01(v: number) {
 }
 function clampSize(v: number) {
   return Number.isFinite(v) ? Math.max(0.2, Math.min(4, v)) : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Review screen: what each imported image shows (before any floor plan is read)
+// ---------------------------------------------------------------------------
+
+const classifySchema = obj({
+  images: {
+    type: 'array',
+    items: obj({
+      index: { type: 'integer' },
+      kind: { type: 'string', enum: ['photo', 'floorplan', 'exterior', 'other'] },
+      roomType: { type: 'string', enum: [...RoomType.options, 'none'] },
+      roomLabel: str,
+      sameRoomAs: { type: 'array', items: { type: 'integer' } },
+      objects: { type: 'array', items: str },
+      materials: { type: 'array', items: str },
+      confidence: num,
+    }),
+  },
+});
+
+export interface ImageClassification {
+  index: number;
+  kind: 'photo' | 'floorplan' | 'exterior' | 'other';
+  roomType: z.infer<typeof RoomType> | 'none';
+  roomLabel: string;
+  sameRoomAs: number[];
+  objects: string[];
+  materials: string[];
+  confidence: number;
+}
+
+/** One Muse call over all imported images: floor plan or photo, which room, what is in it, which images show the same room. */
+export async function classifyImages(opts: { budget: AiBudget; images: string[] }): Promise<{ images: ImageClassification[]; provenance: Provenance }> {
+  const { data, model } = await museJson<{ images: ImageClassification[] }>({
+    budget: opts.budget,
+    system:
+      'You sort the images of a property listing before a 3D reconstruction. For each image say whether it is a floor plan drawing, an interior photo, an exterior photo or something else (logo, map, EPC chart). For interior photos give the room type and a short human label ("Kitchen", "Bedroom", "Living room"), the indexes of other images that show the SAME room (same finishes, windows, furniture), the main furniture and appliances as short singular noun phrases, and the visible wall/floor materials and colours. Only report what is visible. Confidence 0..1.',
+    text: `${opts.images.length} images follow, numbered from 0. Return one entry per image.`,
+    images: opts.images,
+    schemaName: 'listing_image_classification',
+    schema: classifySchema,
+  });
+  const n = opts.images.length;
+  return {
+    images: data.images
+      .filter((i) => i.index >= 0 && i.index < n)
+      .map((i) => ({ ...i, confidence: clamp01(i.confidence), sameRoomAs: i.sameRoomAs.filter((j) => j >= 0 && j < n && j !== i.index), objects: i.objects.slice(0, 20), materials: i.materials.slice(0, 8), roomLabel: i.roomLabel.slice(0, 60) })),
+    provenance: provenance(model, PROMPT_VERSIONS.classifyPhotos),
+  };
 }

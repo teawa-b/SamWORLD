@@ -59,6 +59,8 @@ export const Property = z.object({
   bedrooms: z.number().int().nullable(),
   areaSqM: z.number().nullable(),
   areaEvidence: z.string().nullable(),
+  /** Listing text, when the source provides it (used as context for estimated layouts). */
+  description: z.string().nullable().optional(),
   sourceInfo: z.object({ attribution: z.string(), rightsNote: z.string() }),
   missingData: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -298,6 +300,13 @@ export const SceneObject = z.object({
   levelId: z.string(),
   kind: z.string(),
   modelUrl: z.string().nullable(),
+  /**
+   * What `modelUrl` points at. A Gaussian splat ('ply-splat') is a cloud of
+   * coloured blobs, not an editable mesh, and is rendered as such.
+   */
+  modelFormat: z.enum(['glb', 'ply-splat', 'ply-mesh']).nullable().optional(),
+  /** The SAM 3.1 detection (photo + mask) a reconstruction was made from. */
+  sourceDetectionId: z.string().nullable().optional(),
   sourceMediaIds: z.array(z.string()),
   positionXYZ: Vec3,
   rotationY: z.number(),

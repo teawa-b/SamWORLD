@@ -10,7 +10,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { blockingSegments, computeViewpoints, distPointSegment, pointInPolygon, type Vec2 } from '../shared/index.js';
 import { Hotspot } from '../components.js';
 import { app } from '../state.js';
-import { mounted } from './dollhouse.js';
+import { HOUSE_SCALE, mounted } from './dollhouse.js';
 
 const EYE_HEIGHT = 1.6;
 const SPEED = 1.4;
@@ -133,9 +133,13 @@ export function resetOrbit(world: World) {
   // Portrait screens need the camera further back to fit the house.
   const el = world.renderer.domElement;
   const k = el.clientWidth && el.clientWidth / el.clientHeight > 0.85 ? 1 : 2.1;
-  world.camera.position.set(0.45 * k, 1.12 + 0.88 * k, -0.8 + 0.85 * k);
+  const m = mounted(world);
+  // Fit the dollhouse: distance from its size on the plinth, seen from ~40° above at an angle.
+  const span = m ? Math.max(m.build.size.x, m.build.size.z) * HOUSE_SCALE : 0.8;
+  const d = Math.max(0.7, span * 1.45) * k;
+  world.camera.position.set(d * 0.42, 1.05 + d * 0.62, -0.8 + d * 0.68);
   world.camera.rotation.set(0, 0, 0);
-  orbit?.target.set(0, 1.12, -0.8);
+  orbit?.target.set(0, 1.05, -0.8);
   orbit?.update();
 }
 
@@ -258,8 +262,11 @@ export class WalkthroughSystem extends createSystem({
     const step = (SPEED * delta) / Math.max(1, len);
     const dx = (-Math.sin(yaw) * fwd + Math.cos(yaw) * strafe) * step;
     const dz = (-Math.cos(yaw) * fwd - Math.sin(yaw) * strafe) * step;
+    // Sub-step so a slow frame (large delta) can't carry the walker through a wall.
     const from: Vec2 = [this.head.x, this.head.z];
-    const to = resolveCollisions([from[0] + dx, from[1] + dz]);
+    const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / (RADIUS * 0.5)));
+    let to: Vec2 = from;
+    for (let i = 0; i < n; i++) to = resolveCollisions([to[0] + dx / n, to[1] + dz / n]);
     this.player.position.x += to[0] - from[0];
     this.player.position.z += to[1] - from[1];
   }

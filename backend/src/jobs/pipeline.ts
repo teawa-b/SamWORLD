@@ -111,13 +111,16 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   // ---- 1. Ingest ---------------------------------------------------------
   const property = store.get('properties', run.propertyId);
   if (!property) throw new PipelineError('PROPERTY_NOT_FOUND', `Property ${run.propertyId} not found`);
-  const media = Object.values(store.all('media')).filter((m) => m.propertyId === property.id);
+  // Media the user switched off on the review screen is not used; order follows the review screen.
+  const allMedia = Object.values(store.all('media')).filter((m) => m.propertyId === property.id);
+  const media = allMedia.filter((m) => m.metadata.excluded !== true).sort((a, b) => Number(a.metadata.order ?? 0) - Number(b.metadata.order ?? 0));
   const plans = media.filter((m) => m.type === 'floorplan');
   const photos = media.filter((m) => m.type === 'photo' && m.usageRightsStatus !== 'unverified' && MODEL_IMAGE_TYPES.has(m.mimeType));
   const skippedRights = media.filter((m) => m.usageRightsStatus === 'unverified');
   await ctx.setState('INGESTED', 'ingest', 0.05);
   await ctx.log('ingest', `${plans.length} floor plan(s), ${photos.length} usable photo(s); live Meta inference ${metaConfigured() ? 'ON' : 'OFF (MODEL_API_KEY not set)'}`);
   if (skippedRights.length) await ctx.log('ingest', `${skippedRights.length} media item(s) skipped: usage rights unverified`, 'warn');
+  if (allMedia.length > media.length) await ctx.log('ingest', `${allMedia.length - media.length} image(s) left out on the review screen`);
   const corrections = store.get('roomMappings', property.id);
   const isFixture = property.sourceProvider === FIXTURE_PROVIDER;
   const live = metaConfigured();
@@ -148,8 +151,8 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     interp = FloorplanInterpretation.parse(fixtureFile(property.sourceListingId, 'interpretation.fixture.json'));
     await ctx.log('parse', live ? 'No raster plan available for Muse; using the fixture reference interpretation' : 'Using the fixture reference interpretation (hand-authored stand-in for Muse Spark)', 'warn');
   } else {
-    const facts = { bedrooms: property.bedrooms, bathrooms: null, areaSqM: property.areaSqM, propertyType: property.status, description: null, address: property.address };
-    if (plans.length && !live) await ctx.log('parse', 'The floor plan can’t be read without MODEL_API_KEY; estimating the layout instead', 'warn');
+    const facts = { bedrooms: property.bedrooms, bathrooms: null, areaSqM: property.areaSqM, propertyType: property.status, description: property.description ?? null, address: property.address };
+    if (plans.length && !live) await ctx.log('parse', 'The floor plan can’t be read automatically without MODEL_API_KEY. Trace it in the plan editor (free, no AI) for a plan-accurate model; estimating the layout for now', 'warn');
     else if (!plans.length) await ctx.log('parse', 'No floor plan in this listing; estimating the layout', 'warn');
     if (live && photoData.length) {
       const sample = photoData.slice(0, 20);
@@ -231,6 +234,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
       photos: photoData.map((p) => ({ mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType) })),
       structure,
       planImages: planImages.map((p) => p.dataUrl),
+      userLabels: Object.fromEntries(photoData.map((p, i) => [i, p.media.roomGuess]).filter(([, l]) => l && !structure.rooms.some((r) => r.id === l))),
     });
     matches = r.matches;
     visibleObjects = r.visibleObjects;
@@ -238,7 +242,11 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   }
   // Admin corrections and filename pre-assignments override AI matches.
   const manual = new Map<string, string | null>();
-  for (const p of photos) if (p.roomGuess && structure.rooms.some((r) => r.id === p.roomGuess)) manual.set(p.id, p.roomGuess);
+  for (const p of photos) {
+    const roomId = p.roomGuess ? roomForLabel(structure, p.roomGuess) : null;
+    if (roomId) manual.set(p.id, roomId);
+    else if (p.roomGuess && !live) await ctx.log('match', `Photo labelled “${p.roomGuess}” matches no room on the plan; assign it on the Rooms tab`, 'warn');
+  }
   for (const m of corrections?.mappings ?? []) manual.set(m.mediaId, m.roomId);
   for (const [mediaId, roomId] of manual) {
     matches = matches.filter((m) => m.mediaId !== mediaId);
@@ -406,7 +414,9 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
       ...(interp.layoutSource !== 'floorplan' && interp.layoutSource !== 'photo-floorplan'
         ? [interp.layoutSource === 'photos' ? 'No floor plan: the room list was read from the photos and arranged into an estimated layout.' : 'No floor plan or usable photos: the layout is estimated from the listing details.']
         : []),
-      'Furniture is represented by proxy shapes sized from estimates.',
+      objects.some((o) => o.reconstructionMethod === 'sam3d')
+        ? 'Most furniture is represented by proxy shapes sized from estimates; items marked SAM 3D were reconstructed from a photo (position and scale still estimated).'
+        : 'Furniture is represented by proxy shapes sized from estimates.',
       ...interp.uncertainties,
     ],
   };
@@ -419,6 +429,35 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Room for a user-supplied label: a room id, an exact label ("Bedroom 2"), or a
+ * room type that only one room has ("Kitchen"). Ambiguous labels return null.
+ */
+export function roomForLabel(structure: Structure, label: string): string | null {
+  const l = label.trim().toLowerCase();
+  if (!l) return null;
+  const byId = structure.rooms.find((r) => r.id === label);
+  if (byId) return byId.id;
+  const exact = structure.rooms.filter((r) => r.label.trim().toLowerCase() === l);
+  if (exact.length === 1) return exact[0].id;
+  const TYPES: [RegExp, Structure['rooms'][number]['type']][] = [
+    [/kitchen/, 'kitchen'],
+    [/living|lounge|sitting|reception/, 'living'],
+    [/dining/, 'dining'],
+    [/bed/, 'bedroom'],
+    [/bath|shower|en-?suite/, 'bathroom'],
+    [/\bwc\b|toilet|cloak/, 'wc'],
+    [/hall|entrance/, 'hall'],
+    [/landing/, 'landing'],
+    [/study|office/, 'study'],
+    [/utility|laundry/, 'utility'],
+  ];
+  const type = TYPES.find(([re]) => re.test(l))?.[1];
+  if (!type) return null;
+  const ofType = structure.rooms.filter((r) => r.type === type || r.label.toLowerCase().includes(l));
+  return ofType.length === 1 ? ofType[0].id : null;
+}
 
 async function parseWithMuse(ctx: Ctx, planImages: PlanRaster[], areaSqM: number | null, model: string): Promise<FloorplanInterpretation> {
   await ctx.log('parse', `Reading ${planImages.length} plan image(s) with ${model}`);

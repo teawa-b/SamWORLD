@@ -3,7 +3,7 @@
  * in the browser). If the backend is unreachable it falls back to scenes
  * baked into /cached by the backend's `npm run bake`, read-only.
  */
-import type { Property, PropertyMedia, ReconstructionRun, RoomMappingPatch, SceneManifest } from './shared/index.js';
+import type { FloorplanInterpretation, PlanLevel, Property, PropertyMedia, ReconstructionRun, RoomMappingPatch, SceneCorrectionPatch, SceneManifest } from './shared/index.js';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 const STATIC = `${import.meta.env.BASE_URL}cached/`;
@@ -16,6 +16,23 @@ export interface Capabilities {
   redesign: boolean;
   realtyApi: boolean;
   sam3d: boolean;
+  sam3dProvider?: 'modal' | 'fal' | null;
+}
+
+export interface Extraction {
+  adapter: string;
+  found: number;
+  floorplans: number;
+  downloaded: number;
+  failed: { url: string; error: string }[];
+  notes: string[];
+}
+
+export interface ObjectJob {
+  id: string;
+  objectId: string;
+  state: 'running' | 'done' | 'failed';
+  message: string;
 }
 
 export interface SearchResult {
@@ -67,7 +84,7 @@ export class ApiError extends Error {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
+  const res = await fetch(`${BASE}${path}`, { ...init, headers: { ...(init?.body != null ? { 'content-type': 'application/json' } : {}), ...(init?.headers ?? {}) } });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, body?.error?.code ?? 'HTTP', body?.error?.message ?? res.statusText);
   return body as T;
@@ -77,14 +94,18 @@ export let staticMode = false;
 
 export const api = {
   async health(): Promise<{ capabilities: Capabilities; realtyApi: { available: boolean; reason: string } } | null> {
-    try {
-      const res = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(2500) });
-      if (!res.ok || !res.headers.get('content-type')?.includes('json')) throw new Error();
-      return await res.json();
-    } catch {
-      staticMode = true;
-      return null;
+    // A cold server (or first dev compile) can be slow: try twice before falling back to baked scenes.
+    for (const timeout of [6000, 10000]) {
+      try {
+        const res = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(timeout) });
+        if (!res.ok || !res.headers.get('content-type')?.includes('json')) throw new Error();
+        return await res.json();
+      } catch {
+        /* retry once */
+      }
     }
+    staticMode = true;
+    return null;
   },
   async search(q: string): Promise<{ results: SearchResult[]; providerNotice: string | null }> {
     if (staticMode) {
@@ -111,6 +132,34 @@ export const api = {
     return call(`/api/properties/${id}/scene`);
   },
   saveMappings: (id: string, patch: Partial<RoomMappingPatch>) => call(`/api/properties/${id}/room-mappings`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  createProperty: (title: string) => call<{ property: Property }>('/api/properties', { method: 'POST', body: JSON.stringify({ title: title || undefined, rightsConfirmed: true }) }),
+  importListingUrl: (url: string) => call<{ property: Property; media: PropertyMedia[]; extraction: Extraction }>('/api/imports/listing', { method: 'POST', body: JSON.stringify({ url, rightsConfirmed: true }) }),
+  async uploadImage(propertyId: string, file: File, opts: { type?: 'photo' | 'floorplan' } = {}): Promise<{ media: PropertyMedia; duplicate: boolean }> {
+    const q = new URLSearchParams({ filename: file.name.slice(0, 200), ...(opts.type ? { type: opts.type } : {}) });
+    const type = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type) ? file.type : 'application/octet-stream';
+    const res = await fetch(`${BASE}/api/properties/${propertyId}/media?${q}`, { method: 'POST', body: file, headers: { 'content-type': type, 'x-rights-confirmed': 'true' } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, body?.error?.code ?? 'HTTP', body?.error?.message ?? res.statusText);
+    return body;
+  },
+  addImageUrls: (propertyId: string, urls: { url: string; type?: 'photo' | 'floorplan' }[]) =>
+    call<{ results: { url: string; ok: boolean; error?: string; duplicate?: boolean }[]; media: PropertyMedia[] }>(`/api/properties/${propertyId}/media/urls`, { method: 'POST', body: JSON.stringify({ urls, rightsConfirmed: true }) }),
+  updateMedia: (mediaId: string, patch: { type?: 'photo' | 'floorplan'; roomGuess?: string | null; excluded?: boolean; levelGuess?: string | null }) =>
+    call<{ media: PropertyMedia }>(`/api/media/${mediaId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteMedia: (mediaId: string) => call(`/api/media/${mediaId}`, { method: 'DELETE', headers: {} }),
+  reorderMedia: (propertyId: string, mediaIds: string[]) => call<{ media: PropertyMedia[] }>(`/api/properties/${propertyId}/media-order`, { method: 'PUT', body: JSON.stringify({ mediaIds }) }),
+  updateProperty: (propertyId: string, patch: { address?: string; bedrooms?: number | null; areaSqM?: number | null }) =>
+    call<{ property: Property }>(`/api/properties/${propertyId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  suggestRooms: (propertyId: string) => call<{ media: PropertyMedia[]; aiCalls: number; model: string }>(`/api/properties/${propertyId}/media/suggest`, { method: 'POST', body: '{}' }),
+  interpretation: (propertyId: string) => call<{ interpretation: FloorplanInterpretation | null }>(`/api/properties/${propertyId}/interpretation`),
+  saveInterpretation: (propertyId: string, levels: PlanLevel[]) =>
+    call<{ interpretation: FloorplanInterpretation }>(`/api/properties/${propertyId}/interpretation`, { method: 'PUT', body: JSON.stringify({ levels }) }),
+  saveObjects: (propertyId: string, objects: SceneCorrectionPatch['objects']) =>
+    call<{ sceneVersion: number | null }>(`/api/properties/${propertyId}/scene-corrections`, { method: 'PATCH', body: JSON.stringify({ objects }) }),
+  sam3dStatus: () => call<{ ok: boolean; reason: string; provider: string }>('/api/sam3d/status'),
+  reconstructObject: (propertyId: string, objectId: string, detectionId: string | undefined) =>
+    call<{ job: ObjectJob }>(`/api/properties/${propertyId}/objects/${encodeURIComponent(objectId)}/reconstruct-3d`, { method: 'POST', body: JSON.stringify({ detectionId, approveGpuCost: true }) }),
+  objectJob: (jobId: string) => call<ObjectJob>(`/api/object-jobs/${jobId}`),
   visualise: (id: string, roomId: string, mediaId: string, instruction: string) =>
     call<{ url: string; label: string }>(`/api/properties/${id}/rooms/${roomId}/visualise`, { method: 'POST', body: JSON.stringify({ mediaId, instruction }) }),
 };

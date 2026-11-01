@@ -3,7 +3,8 @@ import projectOptions from 'virtual:iwsdk-project';
 import { app } from './state.js';
 import { DollhouseSystem, mountHouse, unmountHouse } from './systems/dollhouse.js';
 import { MenuSystem } from './systems/menu.js';
-import { WalkthroughSystem } from './systems/walkthrough.js';
+import { resetOrbit, WalkthroughSystem } from './systems/walkthrough.js';
+import { installObjectPicking } from './systems/objects.js';
 import { icon } from './ui/icons.js';
 import { Globe } from './ui/globe.js';
 import { Panel } from './ui/panel.js';
@@ -13,27 +14,42 @@ import './ui/styles.css';
 const world = await World.create(document.getElementById('scene-container') as HTMLDivElement, projectOptions);
 if (import.meta.env.DEV) (window as unknown as { __walkin: unknown }).__walkin = { world, app };
 world.registerSystem(DollhouseSystem).registerSystem(WalkthroughSystem).registerSystem(MenuSystem);
+installObjectPicking(world);
 
 // Rebuild the 3D house whenever a new scene manifest arrives.
 let mountedVersion = '';
+let mountedProperty = '';
 effect(() => {
   const scene = app.scene.value;
   const key = scene ? `${scene.propertyId}:${scene.sceneVersion}:${scene.complete}` : '';
   if (key === mountedVersion) return;
   mountedVersion = key;
-  if (scene) mountHouse(world, scene);
-  else unmountHouse(world);
+  const fresh = !!scene && mountedProperty !== scene.propertyId;
+  if (scene) {
+    mountHouse(world, scene);
+    // A newly opened property: show the rooms (roof off) and frame the whole house.
+    if (fresh && !app.inXR.value) {
+      app.roofHidden.value = true;
+      if (app.mode.value !== 'walk') resetOrbit(world);
+    }
+    mountedProperty = scene.propertyId;
+  } else {
+    unmountHouse(world);
+    mountedProperty = '';
+  }
 });
 
 document.querySelector('#topbar .logo')!.innerHTML = icon('roof', 14);
 
-// Offer VR only when the browser actually supports an immersive session.
+// VR/AR is out of the main desktop journey for now. The WebXR systems are kept;
+// set VITE_ENABLE_XR=true at build time to offer the VR button again.
 const xrButton = document.getElementById('enter-xr') as HTMLButtonElement;
 xrButton.innerHTML = `${icon('headset', 18)}VR`;
-navigator.xr
-  ?.isSessionSupported(SessionMode.ImmersiveVR)
-  .then((ok) => (xrButton.hidden = !ok))
-  .catch(() => undefined);
+if (import.meta.env.VITE_ENABLE_XR === 'true')
+  navigator.xr
+    ?.isSessionSupported(SessionMode.ImmersiveVR)
+    .then((ok) => (xrButton.hidden = !ok))
+    .catch(() => undefined);
 xrButton.addEventListener('click', () => world.launchXR());
 
 // On phones the sheet covers the bottom of the screen: shift the projection so

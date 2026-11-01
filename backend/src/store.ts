@@ -27,10 +27,23 @@ export interface Collections {
   roomMappings: Record<string, RoomMappingPatch>;
   sceneCorrections: Record<string, SceneCorrectionPatch>;
   usage: Record<string, { day: string; redesigns: number }>;
+  /** Per-object SAM 3D requests started from the viewer. */
+  objectJobs: Record<string, ObjectJob>;
+}
+
+export interface ObjectJob {
+  id: string;
+  propertyId: string;
+  objectId: string;
+  detectionId: string;
+  state: 'running' | 'done' | 'failed';
+  message: string;
+  startedAt: string;
+  finishedAt: string | null;
 }
 
 type Name = keyof Collections;
-const names: Name[] = ['properties', 'media', 'runs', 'scenes', 'interpretations', 'roomMappings', 'sceneCorrections', 'usage'];
+const names: Name[] = ['properties', 'media', 'runs', 'scenes', 'interpretations', 'roomMappings', 'sceneCorrections', 'usage', 'objectJobs'];
 
 class Store {
   private cache = new Map<Name, Record<string, unknown>>();

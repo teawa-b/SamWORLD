@@ -57,7 +57,11 @@ export const config = {
   },
 
   sam3d: {
+    /** 'modal' = the owner's worker-3d/ deployment; 'fal' = fal.ai's hosted fal-ai/sam-3/3d-objects. */
+    provider: (process.env.SAM3D_PROVIDER ?? 'modal') as 'modal' | 'fal',
     enabled: bool(process.env.SAM3D_ENABLED, false),
+    falKey: process.env.FAL_KEY ?? '',
+    falEndpoint: process.env.FAL_SAM3D_ENDPOINT ?? 'fal-ai/sam-3/3d-objects',
     endpointUrl: process.env.MODAL_ENDPOINT_URL ?? '',
     authSecret: process.env.MODAL_AUTH_SECRET ?? '',
     maxObjectsPerRun: int(process.env.SAM3D_MAX_OBJECTS_PER_RUN, 1),
@@ -83,6 +87,7 @@ export function capabilities() {
     samModel: config.meta.samModel,
     redesign: metaConfigured() && config.meta.redesignEnabled,
     realtyApi: config.realty.apiKey.length > 0,
-    sam3d: config.sam3d.enabled && !!config.sam3d.endpointUrl,
+    sam3d: config.sam3d.enabled && (config.sam3d.provider === 'fal' ? !!config.sam3d.falKey : !!config.sam3d.endpointUrl),
+    sam3dProvider: config.sam3d.enabled ? config.sam3d.provider : null,
   };
 }

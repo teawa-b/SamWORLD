@@ -15,49 +15,8 @@ import { countryFromPoint, geocode, reverseGeocode } from './providers/geo.js';
 import { store } from './store.js';
 import { MODEL_IMAGE_TYPES, toDataUrl } from './lib/image.js';
 import { readFile } from 'node:fs/promises';
-
-const Id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
-const now = () => new Date().toISOString();
-
-class HttpError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-function parse<T>(schema: z.ZodType<T>, value: unknown): T {
-  const r = schema.safeParse(value);
-  if (!r.success) throw new HttpError(400, 'BAD_REQUEST', r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
-  return r.data;
-}
-
-// Per-IP token bucket for endpoints that can spend money.
-const buckets = new Map<string, { tokens: number; at: number }>();
-function rateLimit(req: FastifyRequest, perMinute: number) {
-  const key = `${req.ip}:${req.routeOptions.url}`;
-  const b = buckets.get(key) ?? { tokens: perMinute, at: Date.now() };
-  b.tokens = Math.min(perMinute, b.tokens + ((Date.now() - b.at) / 60_000) * perMinute);
-  b.at = Date.now();
-  if (b.tokens < 1) throw new HttpError(429, 'RATE_LIMITED', 'Too many requests; try again shortly.');
-  b.tokens -= 1;
-  buckets.set(key, b);
-}
-
-function requireProperty(id: string) {
-  const p = store.get('properties', parse(Id, id));
-  if (!p) throw new HttpError(404, 'NOT_FOUND', 'Property not found');
-  return p;
-}
-
-function sendFile(reply: FastifyReply, abs: string, mime: string) {
-  reply.header('content-type', mime).header('cache-control', 'public, max-age=300').header('x-content-type-options', 'nosniff');
-  if (mime === 'image/svg+xml') reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'");
-  return reply.send(createReadStream(abs));
-}
+import { registerImportRoutes } from './routes-import.js';
+import { HttpError, Id, now, parse, rateLimit, requireProperty, sendFile } from './http.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.setErrorHandler((err, _req, reply) => {
@@ -66,6 +25,8 @@ export async function registerRoutes(app: FastifyInstance) {
     if (status >= 500) app.log.error(err);
     reply.status(status).send({ error: { code: e.code ?? 'INTERNAL', message: status >= 500 && !(e instanceof HttpError) ? 'Internal error' : e.message } });
   });
+
+  await registerImportRoutes(app);
 
   app.get('/health', async () => ({ ok: true, time: now(), capabilities: capabilities(), realtyApi: realtyStatus(), metaModels: lastResolution && { available: lastResolution.available, changed: lastResolution.changed, probes: lastResolution.probes ?? null, error: lastResolution.error ?? null } }));
 
@@ -240,7 +201,27 @@ export async function registerRoutes(app: FastifyInstance) {
     const prev = store.get('sceneCorrections', property.id);
     const merged = { objects: [...(prev?.objects ?? []).filter((o) => !patch.objects.some((n) => n.id === o.id)), ...patch.objects] };
     await store.put('sceneCorrections', property.id, merged);
-    return { saved: merged };
+    // Apply to the current scene straight away (no rebuild, no AI): moves, turns and removals.
+    const scene = store.get('scenes', property.id);
+    if (scene) {
+      const at = now();
+      scene.objects = scene.objects
+        .filter((o) => !patch.objects.some((c) => c.id === o.id && c.removed))
+        .map((o) => {
+          const c = patch.objects.find((x) => x.id === o.id);
+          if (!c) return o;
+          const next = { ...o, positionXYZ: [...o.positionXYZ] as typeof o.positionXYZ };
+          if (c.positionXZ) [next.positionXYZ[0], next.positionXYZ[2]] = c.positionXZ;
+          if (c.rotationY != null) next.rotationY = c.rotationY;
+          next.placementNotes = [...o.placementNotes.filter((n) => !n.startsWith('Adjusted by hand')), 'Adjusted by hand in the viewer'];
+          next.provenance = { ...o.provenance, method: 'admin-correction', note: `was ${o.provenance.method}`, at };
+          return next;
+        });
+      scene.sceneVersion += 1;
+      scene.generatedAt = at;
+      await store.put('scenes', property.id, scene);
+    }
+    return { saved: merged, sceneVersion: scene?.sceneVersion ?? null };
   });
 
   app.post('/api/properties/:propertyId/rooms/:roomId/visualise', async (req) => {

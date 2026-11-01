@@ -25,6 +25,12 @@ export const app = {
   /** Incremented to ask systems to snap everything back to defaults. */
   resetTick: signal(0),
   inXR: signal(false),
+  /** Furniture picked in the viewer (object id). */
+  selectedObjectId: signal<string | null>(null),
+  /** Furniture hidden in this browser only (not saved). */
+  hiddenObjectIds: signal<string[]>([]),
+  /** Unsaved moves/turns, by object id (plan metres / radians). */
+  objectEdits: signal<Record<string, { x: number; z: number; rotationY: number }>>({}),
 };
 
 export const EXPLODE_LIFT_M = 4;
