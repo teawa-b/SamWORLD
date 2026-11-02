@@ -20,7 +20,7 @@ import { classifyImages } from './meta/muse.js';
 import { resolveModels } from './meta/models.js';
 import { resolveStorageKey } from './providers/fixture.js';
 import { addImage, addImageUrls, createUploadProperty, importFromListingUrl, IngestError, MAX_IMAGE_BYTES, realtyIdFromUrl } from './providers/ingest.js';
-import { ExtractionError } from './providers/listing-url.js';
+import { ExtractionError, extractListing } from './providers/listing-url.js';
 import { attachFloorPlans, floorPlansElsewhere, importRealty, realtyStatus } from './providers/realtyapi.js';
 import { detectionFor, reconstructObject, sam3dReady, Sam3dUnavailableError } from './jobs/sam3d.js';
 import { store } from './store.js';
@@ -84,8 +84,27 @@ export async function registerImportRoutes(app: FastifyInstance) {
         for (const m of mediaFor(id)) await store.del('media', m.id);
         for (const [i, m] of imported.media.entries()) await store.put('media', m.id, { ...m, metadata: { ...m.metadata, order: i, importedVia: 'listing-api' } });
         const notes: string[] = [];
-        // No floor plan on this portal? The same home's listing elsewhere often has one.
-        if (!imported.media.some((m) => m.type === 'floorplan') && imported.property.location) {
+        // No floor plan from the data feed? Ask the listing page itself once (robots.txt respected, no bot-check
+        // workarounds: if the site refuses, we say so and move on).
+        if (!imported.media.some((m) => m.type === 'floorplan')) {
+          try {
+            const ex = await extractListing(body.url);
+            const plans = ex.images.filter((i) => i.kind === 'floorplan');
+            req.log.info(`[listing-page] ${body.url}: page read, ${ex.images.length} images, ${plans.length} floor plan(s)`);
+            if (plans.length) {
+              const prop = store.get('properties', id)!;
+              const res = await addImageUrls(prop, plans.slice(0, 4).map((p) => ({ url: p.url, type: 'floorplan' as const, evidence: `${p.evidence} (listing page)` })), 'listing-url');
+              const ok = res.filter((r) => r.ok).length;
+              notes.push(ok ? `Found ${ok} floor plan(s) on the listing page itself.` : 'The listing page shows a floor plan but it couldn’t be downloaded.');
+            }
+          } catch (e) {
+            const msg = (e as Error).message;
+            req.log.info(`[listing-page] ${body.url}: ${msg}`);
+            notes.push(`The listing site wouldn’t let WalkIn read the page directly (${msg.split('.')[0]}). Use “Send to WalkIn” from your browser to bring the floor plan in.`);
+          }
+        }
+        // Still none? The same home's listing elsewhere often has one.
+        if (!mediaFor(id).some((m) => m.type === 'floorplan') && imported.property.location) {
           const r = await findAndAttachPlans(imported.property).catch((e) => ({ added: 0, note: `Floor plan search elsewhere failed: ${(e as Error).message}` }));
           notes.push(r.note);
         }

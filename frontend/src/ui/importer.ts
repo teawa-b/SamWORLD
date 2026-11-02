@@ -180,6 +180,7 @@ export class ImportFlow {
       </div>
       <p class="xs faint">${esc(p.sourceInfo.attribution)}. Bedrooms, baths, floors and area shape the estimated layout when there is no floor plan.</p>
       ${ex ? `<p class="xs muted">Found ${ex.found} image(s) on the page (${ex.floorplans} floor plan) via ${esc(ex.adapter)}; ${ex.downloaded} imported${ex.failed.length ? `, ${ex.failed.length} couldn’t be downloaded` : ''}.</p>` : ''}
+      ${ex?.notes.length ? ex.notes.map((n) => `<div class="callout info">${icon('info')}<div>${esc(n)}</div></div>`).join('') : ''}
       ${planNote}
       <div class="review-actions">
         <button class="btn small" data-action="pick-files">${icon('photo', 16)}Add images</button>
