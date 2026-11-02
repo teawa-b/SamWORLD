@@ -84,7 +84,7 @@ describe('lifting SAM masks into 3D', () => {
     await store.put('scans', id, scan);
     const seen: string[] = [];
     await understandScan(scan, {
-      listObjects: async () => ({ concepts: ['Coffee table', 'lamp', 'coffee table'], model: 'FAKE muse' }),
+      listObjects: async () => ({ items: [{ concept: 'Coffee table', frames: [0] }, { concept: 'lamp', frames: [] }, { concept: 'coffee table', frames: [0] }], model: 'FAKE muse' }),
       segment: async (_url, size, concept) => {
         seen.push(concept);
         expect(size).toEqual({ width: 1024, height: 768 });
@@ -92,7 +92,8 @@ describe('lifting SAM masks into 3D', () => {
       },
     });
     const s = store.get('scans', id)!;
-    expect(seen.sort()).toEqual(['coffee table', 'lamp']);
+    // Doors and windows are always looked for.
+    expect(seen.sort()).toEqual(['coffee table', 'door', 'lamp', 'window']);
     expect(s.objectsStatus?.state).toBe('done');
     expect(s.objects).toHaveLength(1);
     const o = s.objects![0];
@@ -207,5 +208,46 @@ describe('compact cloud', () => {
       worst = Math.max(worst, d);
     }
     expect(worst).toBeLessThan(0.002);
+  });
+});
+
+describe('surfaces on walls', () => {
+  it('finds the front face of a door facing the viewer, corners in reading order', async () => {
+    const { frontFace } = await import('../src/shared/index.js');
+    // A 0.9 m wide, 2 m tall, 5 cm thick door on the z = -2 wall, viewer in the room at z = 0.
+    const f = frontFace({ centre: [0.5, 1, -2], size: [0.9, 2, 0.05], yaw: 0 }, [0, 0])!;
+    expect(f.normal[1]).toBeCloseTo(1);
+    expect(f.width).toBeCloseTo(0.9);
+    const [tl, tr, br, bl] = f.corners;
+    expect(tl[0]).toBeCloseTo(0.05); // viewer's left is -x
+    expect(tr[0]).toBeCloseTo(0.95);
+    expect(tl[1]).toBeCloseTo(2);
+    expect(br[1]).toBeCloseTo(0);
+    expect(bl[2]).toBeCloseTo(-1.975);
+    expect(frontFace({ centre: [0, 0.4, 0], size: [1, 0.8, 1], yaw: 0 }, [0, 2])).toBeNull();
+  });
+
+  it('straightens a photographed quad into an upright image', async () => {
+    const { warpQuad } = await import('../src/objects.js');
+    // 100 × 100 frame: left half red, right half blue. Warp the quad covering the middle → red then blue.
+    const png = new PNG({ width: 100, height: 100 });
+    for (let y = 0; y < 100; y++) for (let x = 0; x < 100; x++) png.data.set(x < 50 ? [220, 20, 20, 255] : [20, 20, 220, 255], (y * 100 + x) * 4);
+    const out = warpQuad(PNG.sync.write(png), [[20, 10], [80, 15], [80, 85], [20, 90]], 1);
+    const jpeg = (await import('jpeg-js')).default;
+    const img = jpeg.decode(out, { useTArray: true });
+    const px = (x: number, y: number) => [...img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3)];
+    expect(px(50, 384)[0]).toBeGreaterThan(150);
+    expect(px(700, 384)[2]).toBeGreaterThan(150);
+  });
+
+  it('drops isolated floating points and keeps surfaces', async () => {
+    const { strayFilter } = await import('../src/shared/index.js');
+    const pts: number[] = [];
+    for (let x = 0; x < 1; x += 0.01) for (let z = 0; z < 1; z += 0.01) pts.push(x, 0, z); // 1 cm, like real scans
+    const surface = pts.length / 3;
+    pts.push(5, 5, 5, -3, 2, 1);
+    const keep = strayFilter(Float32Array.from(pts));
+    expect(keep.length).toBeGreaterThan(0.97 * surface); // only the patch's outermost edge thins
+    expect([...keep].some((i) => i >= surface)).toBe(false); // both floaters gone
   });
 });

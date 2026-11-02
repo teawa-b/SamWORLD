@@ -17,7 +17,7 @@ import { restyleImage, surfaceTexture } from './meta/image.js';
 import { understandScan } from './objects.js';
 import { validateImage } from './providers/ingest.js';
 import { startRestyle, textureDir } from './restyle.js';
-import { encodeCloud, fitRoomShell, parsePly } from './shared/index.js';
+import { encodeCloud, findInnerWalls, fitRoomShell, parsePly, strayFilter, transformPointRowMajor } from './shared/index.js';
 import { store, type Restyle, type Scan, type ScanCamera } from './store.js';
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
@@ -28,11 +28,21 @@ const CLOUD_FORMAT = 'voxel-1cm-1m';
  * PLY. The viewer downloads this; the PLY stays the source of truth.
  */
 async function compactCloud(scan: Scan): Promise<string> {
-  const file = join(scanDir(scan.id), `${scan.cloud!.file}.rsc.gz`);
+  const file = join(scanDir(scan.id), `${scan.cloud!.file}.rsc2.gz`);
   if (!existsSync(file)) {
     const ply = await readFile(join(scanDir(scan.id), scan.cloud!.file));
     const pc = parsePly(ply.buffer.slice(ply.byteOffset, ply.byteOffset + ply.byteLength) as ArrayBuffer, { maxPoints: 2_000_000 });
-    await writeFile(file, await promisify(gzip)(encodeCloud(pc.positions, pc.colors), { level: 6 }));
+    // Drop floaters (isolated points) before sending: they read as dust in the viewer. A sparse cloud (where
+    // the filter would remove more than a fifth) is sent as it is.
+    let keep = strayFilter(pc.positions);
+    if (keep.length < 0.8 * pc.count) keep = Uint32Array.from({ length: pc.count }, (_, i) => i);
+    const pos = new Float32Array(keep.length * 3);
+    const col = new Float32Array(keep.length * 3);
+    keep.forEach((i, j) => {
+      pos.set(pc.positions.subarray(i * 3, i * 3 + 3), j * 3);
+      col.set(pc.colors.subarray(i * 3, i * 3 + 3), j * 3);
+    });
+    await writeFile(file, await promisify(gzip)(encodeCloud(pos, col), { level: 6 }));
   }
   return file;
 }
@@ -98,6 +108,17 @@ async function reconstruct(scan: Scan): Promise<void> {
       }
     await save({ message: 'Finding the floor, ceiling and walls…' });
     const shell = fitRoomShell(pc.positions, { cameras: reply.cameras ?? [] });
+    if (!shell.fallback) {
+      // Walls inside the box (an L-shaped room's inner corner), on the full cloud in the room frame.
+      const room = new Float32Array(pc.count * 3);
+      for (let i = 0; i < pc.count; i++) room.set(transformPointRowMajor(shell.alignment, [pc.positions[i * 3], pc.positions[i * 3 + 1], pc.positions[i * 3 + 2]]), i * 3);
+      const cams = (reply.cameras ?? []).map((c) => {
+        const p = transformPointRowMajor(shell.alignment, [c.pose[3], c.pose[7], c.pose[11]]);
+        return [p[0], p[2]] as [number, number];
+      });
+      shell.inner = findInnerWalls(room, shell, { cameras: cams });
+      if (shell.inner.length) shell.diagnostics.push(`${shell.inner.length} inner wall${shell.inner.length > 1 ? 's' : ''} (room isn't a plain rectangle)`);
+    }
     const shape = shell.fallback ? 'room shape not measured; showing the raw scan' : `room ${shell.size.width.toFixed(1)} × ${shell.size.depth.toFixed(1)} × ${shell.size.height.toFixed(1)} m`;
     await save({
       state: 'ready',

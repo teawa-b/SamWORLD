@@ -19,6 +19,9 @@ import {
   bestView,
   boxOfPoints,
   consolidateObjects,
+  frontFace,
+  invertRigid,
+  projectToFrame,
   maskPoints,
   mergeDetections,
   onShell,
@@ -31,14 +34,18 @@ import {
   type LiftedDetection,
   type LiftMask,
 } from './shared/index.js';
+import { startOriginal } from './restyle.js';
 import { store, type Scan, type ScanObject } from './store.js';
 
-export const OBJECTS_PROMPT_VERSION = 'roomshift-objects-v2';
+export const OBJECTS_PROMPT_VERSION = 'roomshift-objects-v3';
 /** Frames SAM looks at (chosen to cover the room's directions) and frames Muse looks at (spread over the video). */
 const KEYFRAMES = 10;
-const MUSE_FRAMES = 8;
-const MAX_CONCEPTS = 12;
-const MAX_OBJECTS = 16;
+const MAX_CONCEPTS = 20;
+const MAX_OBJECTS = 24;
+/** Always looked for: they shape the room in every world. */
+const ALWAYS = ['door', 'window'];
+/** Labels of things that sit flat on a wall and are repainted in place rather than rebuilt in 3D. */
+const SURFACE_LABEL = /door|window|painting|picture|poster|mirror|frame|\btv\b|television|screen|clock|art|decoration|plate|niche|whiteboard|board/i;
 const MIN_DETECTION_POINTS = 30;
 const MIN_OBJECT_POINTS = 120;
 
@@ -51,7 +58,8 @@ export interface FrameDetection {
 
 /** The two Meta calls, swappable in tests. */
 export interface UnderstandDeps {
-  listObjects(images: string[], budget: AiBudget): Promise<{ concepts: string[]; model: string }>;
+  /** What's in the room, and in which of the given images (0-based) each thing can be seen. */
+  listObjects(images: string[], budget: AiBudget): Promise<{ items: { concept: string; frames: number[] }[]; model: string }>;
   segment(dataUrl: string, size: { width: number; height: number }, concept: string, budget: AiBudget, frame: number): Promise<FrameDetection[]>;
 }
 
@@ -59,24 +67,31 @@ const listSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['objects'],
-  properties: { objects: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['concept'], properties: { concept: { type: 'string' } } } } },
+  properties: {
+    objects: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: false, required: ['concept', 'photos'], properties: { concept: { type: 'string' }, photos: { type: 'array', items: { type: 'integer' } } } },
+    },
+  },
 };
 
 export const metaDeps: UnderstandDeps = {
   async listObjects(images, budget) {
-    const { data, model } = await museJson<{ objects: { concept: string }[] }>({
+    const { data, model } = await museJson<{ objects: { concept: string; photos: number[] }[] }>({
       budget,
       system:
-        'You are looking at photos of one real room taken from different spots. List the distinct pieces of furniture and large objects in it, ' +
-        'including things on the walls or floor: sofa, bed, table, chair, wardrobe, bookshelf, cabinet, desk, bench, nightstand, lamp, TV, mirror, painting, ' +
-        'rug, curtain, plant, air conditioner, suitcase, ... Skip the walls, floor and ceiling themselves, windows, doors, loose clothes, small clutter and anything smaller than a shoe box. ' +
-        `Each \`concept\` is a short singular noun phrase an image segmenter can find, e.g. "sofa", "floor lamp", "coffee table". At most ${MAX_CONCEPTS}, largest first, no duplicates. Return JSON only.`,
+        `You are looking at ${images.length} numbered photos (1–${images.length}) of one real room taken from different spots. List every distinct thing in it worth showing in 3D: ` +
+        'furniture (bed, sofa, wardrobe, table, desk, chair, bench, nightstand, cabinet, shelf, TV stand, ...), things on the walls (door, window, painting, mirror, TV, wall lamp, ' +
+        'clock, round wall decoration, wall shelf or niche, air conditioner, curtain, ...) and large things on the floor (rug, plant, suitcase, backpack, laundry basket, ...). ' +
+        'Always include every door and window you can see. Skip the walls, floor and ceiling themselves, loose clothes and anything smaller than a shoe box. ' +
+        '`concept` is a short singular noun phrase an image segmenter can find ("door", "floor lamp", "round wall decoration"); list each kind once even if there are several. ' +
+        `\`photos\` are the numbers of the photos where it is clearly visible. At most ${MAX_CONCEPTS}, largest first. Return JSON only.`,
       text: 'The room:',
       images,
-      schemaName: 'roomshift_objects',
+      schemaName: 'roomshift_objects_v3',
       schema: listSchema,
     });
-    return { concepts: data.objects.map((o) => o.concept), model };
+    return { items: data.objects.map((o) => ({ concept: o.concept, frames: (o.photos ?? []).map((p) => p - 1) })), model };
   },
   async segment(dataUrl, size, concept, budget, frame) {
     const r = await segmentConcept({ budget, mediaId: `f${frame}`, dataUrl, imageSize: size, concept });
@@ -149,7 +164,7 @@ function cached(scan: Scan, deps: UnderstandDeps): UnderstandDeps {
   };
   return {
     async listObjects(images, budget) {
-      const hit = await read<{ concepts: string[]; model: string }>('list.json');
+      const hit = await read<{ items: { concept: string; frames: number[] }[]; model: string }>('list.json');
       if (hit) return { ...hit, model: `${hit.model} (cached)` };
       const r = await deps.listObjects(images, budget);
       await write('list.json', r);
@@ -174,7 +189,8 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
   const status = (state: NonNullable<Scan['objectsStatus']>['state'], message: string, usage = '') => save({ objectsStatus: { state, message, usage } });
   if (deps === metaDeps && !metaConfigured()) return status('skipped', 'Objects need MODEL_API_KEY (SAM 3.1 + Muse Spark); the room works without them.');
   if (!scan.cloud || !scan.cameras.length) return status('skipped', 'No reconstruction to find objects in.');
-  const budget = new AiBudget(KEYFRAMES * MAX_CONCEPTS + 2);
+  const budget = new AiBudget(KEYFRAMES * MAX_CONCEPTS + 3);
+  const live = deps === metaDeps;
   deps = cached(scan, deps);
   try {
     const n = Math.min(scan.frames.length, scan.cameras.length);
@@ -186,14 +202,27 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       }),
     );
 
-    await status('running', 'Muse Spark is looking for furniture…');
-    const museIdx = [...new Set(Array.from({ length: Math.min(MUSE_FRAMES, scan.frames.length) }, (_, i) => Math.floor(((i + 0.5) / Math.min(MUSE_FRAMES, scan.frames.length)) * scan.frames.length)))];
-    const museUrls = await Promise.all(museIdx.map(async (i) => dataUrl(await readFile(join(scanDir(scan.id), scan.frames[i].file)), scan.frames[i].file)));
-    const listed = await deps.listObjects(museUrls, budget).catch(() => deps.listObjects(museUrls.filter((_, k) => k % 2 === 0), budget));
-    const concepts = [...new Set(listed.concepts.map((c) => c.trim().toLowerCase()).filter((c) => c && c.length <= 40))].slice(0, MAX_CONCEPTS);
-    if (!concepts.length) return status('done', 'Muse Spark found no furniture to outline.', budget.summary());
+    // Muse sees the same keyframes SAM will, and says where each thing is, so SAM is only asked where it can see it.
+    await status('running', 'Muse Spark is looking for furniture, doors and windows…');
+    let museFrames = frames;
+    const listed = await deps.listObjects(frames.map((f) => f.url), budget).catch(() => {
+      museFrames = frames.filter((_, k) => k % 2 === 0);
+      return deps.listObjects(museFrames.map((f) => f.url), budget);
+    });
+    const wanted = new Map<string, Set<number>>();
+    for (const it of listed.items) {
+      const c = it.concept.trim().toLowerCase();
+      if (!c || c.length > 40 || (wanted.size >= MAX_CONCEPTS && !wanted.has(c))) continue;
+      const set = wanted.get(c) ?? new Set<number>();
+      for (const k of it.frames) if (museFrames[k]) set.add(museFrames[k].i);
+      wanted.set(c, set);
+    }
+    for (const c of ALWAYS) if (![...wanted.keys()].some((k) => k.includes(c))) wanted.set(c, new Set());
+    // Nothing said about where → look everywhere.
+    const jobs = [...wanted].flatMap(([concept, where]) => frames.filter((f) => !where.size || where.has(f.i)).map((f) => ({ f, concept })));
+    const concepts = [...wanted.keys()];
 
-    await status('running', `SAM 3.1 is outlining ${concepts.join(', ')} in ${frames.length} views…`);
+    await status('running', `SAM 3.1 is outlining ${concepts.join(', ')} (${jobs.length} looks across ${frames.length} views)…`);
     const ply = await readFile(join(scanDir(scan.id), scan.cloud.file));
     const pc = parsePly(ply.buffer.slice(ply.byteOffset, ply.byteOffset + ply.byteLength) as ArrayBuffer, { maxPoints: 2_000_000 });
     const shell = scan.shell && !scan.shell.fallback ? scan.shell : null;
@@ -208,7 +237,6 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
 
     const lifted: LiftedDetection[] = [];
     const failures: string[] = [];
-    const jobs = frames.flatMap((f) => concepts.map((concept) => ({ f, concept })));
     const pix = new Map<number, Int32Array>();
     await pool(jobs, 4, async ({ f, concept }) => {
       let dets: FrameDetection[];
@@ -227,7 +255,7 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
         // small mask's points are shell points, keep them all.
         const all = maskPoints(pix.get(f.i)!, cam, d.mask);
         const off = all.filter((k) => free[k] === 1);
-        const flat = off.length < 0.25 * all.length && area < 0.25 * f.size.width * f.size.height;
+        const flat = off.length < 0.25 * all.length && area < (SURFACE_LABEL.test(concept) ? 0.45 : 0.25) * f.size.width * f.size.height;
         const pts = flat ? all : off;
         const [l, t, r, b] = d.bbox;
         const m = 0.01 * Math.max(f.size.width, f.size.height);
@@ -246,7 +274,9 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       const view = bestView(o.detections);
       const eye = transformPointRowMajor(align, [scan.cameras[view.frame].pose[3], scan.cameras[view.frame].pose[7], scan.cameras[view.frame].pose[11]]);
       const flat = o.detections.filter((d) => d.flat).length * 2 > o.detections.length;
-      const box = flat ? o.box : thickenFlatBox(o.box, shell, [eye[0], eye[2]]);
+      const thin = Math.min(o.box.size[0], o.box.size[2]) < 0.25;
+      const kind = (flat || SURFACE_LABEL.test(o.label)) && thin ? 'surface' : 'furniture';
+      const box = kind === 'surface' ? o.box : thickenFlatBox(o.box, shell, [eye[0], eye[2]]);
       const id = `obj-${objects.length + 1}`;
       const frame = frames.find((f) => f.i === view.frame)!;
       let crop: string | null = null;
@@ -256,8 +286,24 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       } catch {
         crop = null;
       }
+      // Surfaces: the face straightened out (as if photographed head-on), for repainting in place.
+      let face: string | null = null;
+      const ff = kind === 'surface' ? frontFace(box, [eye[0], eye[2]]) : null;
+      if (ff) {
+        const inv = invertRigid(align);
+        const quad = ff.corners.map((p) => projectToFrame(transformPointRowMajor(inv, p), scan.cameras[view.frame], frame.size.width, frame.size.height));
+        const ok = quad.every((q) => q && q[0] > -0.2 * frame.size.width && q[0] < 1.2 * frame.size.width && q[1] > -0.2 * frame.size.height && q[1] < 1.2 * frame.size.height);
+        if (ok) {
+          try {
+            face = `${id}-face.jpg`;
+            await writeFile(join(scanDir(scan.id), face), warpQuad(frame.buf, quad as [number, number][], ff.width / ff.height));
+          } catch {
+            face = null;
+          }
+        }
+      }
       const facing = Math.atan2(eye[0] - box.centre[0], eye[2] - box.centre[2]);
-      objects.push({ id, label: o.label, name: nth > 1 ? `${o.label} ${nth}` : o.label, box, points: o.points.length, views: o.detections.length, bestFrame: view.frame, facing, crop });
+      objects.push({ id, label: o.label, name: nth > 1 ? `${o.label} ${nth}` : o.label, box, points: o.points.length, views: o.detections.length, bestFrame: view.frame, facing, kind, face, crop });
     }
     // Number every copy once we know there are several ("chair 1", "chair 2").
     for (const o of objects) if ((counts.get(o.label) ?? 0) > 1 && o.name === o.label) o.name = `${o.label} 1`;
@@ -267,9 +313,75 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       objects,
       objectsStatus: { state: 'done', message: failures.length ? `${summary} (${failures.length} SAM call${failures.length > 1 ? 's' : ''} failed: ${failures[0]})` : summary, usage: budget.summary(), models: [listed.model] },
     });
+    // Then the room as filmed, in 3D (SAM 3D on the real photos; cached, so a re-run is free).
+    if (live) await startOriginal(scan).catch(() => null);
   } catch (e) {
     await status('failed', (e as Error).message, budget.summary());
   }
+}
+
+/**
+ * The quadrilateral `quad` (top-left, top-right, bottom-right, bottom-left, in frame pixels) of a frame,
+ * resampled into an upright rectangle with the given aspect: the face as if photographed straight-on.
+ */
+export function warpQuad(buf: Buffer, quad: [number, number][], aspect: number): Buffer {
+  const isPng = buf[0] === 0x89 && buf[1] === 0x50;
+  const img = isPng ? PNG.sync.read(buf) : jpeg.decode(buf, { useTArray: true, formatAsRGBA: true });
+  const W = img.width, H = img.height;
+  const long = 768;
+  const ow = Math.max(8, Math.round(aspect >= 1 ? long : long * aspect));
+  const oh = Math.max(8, Math.round(aspect >= 1 ? long / aspect : long));
+  const h = homography(quad);
+  const out = Buffer.alloc(ow * oh * 4);
+  for (let y = 0; y < oh; y++)
+    for (let x = 0; x < ow; x++) {
+      const u = (x + 0.5) / ow, v = (y + 0.5) / oh;
+      const den = h[6] * u + h[7] * v + 1;
+      const sx = Math.min(W - 1.001, Math.max(0, (h[0] * u + h[1] * v + h[2]) / den));
+      const sy = Math.min(H - 1.001, Math.max(0, (h[3] * u + h[4] * v + h[5]) / den));
+      const x0 = Math.floor(sx), y0 = Math.floor(sy), fx = sx - x0, fy = sy - y0;
+      const o = (y * ow + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const p = (yy: number, xx: number) => img.data[(yy * W + xx) * 4 + c];
+        out[o + c] = Math.round(p(y0, x0) * (1 - fx) * (1 - fy) + p(y0, x0 + 1) * fx * (1 - fy) + p(y0 + 1, x0) * (1 - fx) * fy + p(y0 + 1, x0 + 1) * fx * fy);
+      }
+      out[o + 3] = 255;
+    }
+  return jpeg.encode({ data: out, width: ow, height: oh }, 88).data;
+}
+
+/** 3 × 3 homography (h33 = 1) taking the unit square's corners (0,0) (1,0) (1,1) (0,1) to `quad`. */
+function homography(quad: [number, number][]): number[] {
+  const src = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const A: number[][] = [];
+  const b: number[] = [];
+  for (let k = 0; k < 4; k++) {
+    const [u, v] = src[k];
+    const [x, y] = quad[k];
+    A.push([u, v, 1, 0, 0, 0, -u * x, -v * x]);
+    b.push(x);
+    A.push([0, 0, 0, u, v, 1, -u * y, -v * y]);
+    b.push(y);
+  }
+  // Gaussian elimination with partial pivoting.
+  for (let i = 0; i < 8; i++) {
+    let p = i;
+    for (let r = i + 1; r < 8; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+    [A[i], A[p]] = [A[p], A[i]];
+    [b[i], b[p]] = [b[p], b[i]];
+    for (let r = i + 1; r < 8; r++) {
+      const f = A[r][i] / A[i][i];
+      for (let c = i; c < 8; c++) A[r][c] -= f * A[i][c];
+      b[r] -= f * b[i];
+    }
+  }
+  const h = new Array(8).fill(0);
+  for (let i = 7; i >= 0; i--) {
+    let s = b[i];
+    for (let c = i + 1; c < 8; c++) s -= A[i][c] * h[c];
+    h[i] = s / A[i][i];
+  }
+  return h;
 }
 
 /** JPEG crop of a frame around a pixel box, padded by 8%. */

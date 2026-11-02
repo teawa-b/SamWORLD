@@ -111,3 +111,24 @@ describe('fitRoomShell with cameras', () => {
     expect(sh.walls.filter((w) => w.inferred)).toHaveLength(1);
   });
 });
+
+describe('inner walls', () => {
+  it('finds the inner corner of an L-shaped room and ignores a bed under a ceiling cove', async () => {
+    const { findInnerWalls } = await import('../src/shared/room-shell.js');
+    // Room frame: 6 × 4 m box, 2.5 m ceiling. The top-left 2 × 2 m is outside the room, bounded by an inner
+    // wall at x = -1 (z -2..0) and one at z = 0 (x -3..-1). A bed foot (0.5 m) at z = 1.2 under a cove (2.3 m+).
+    const p: number[] = [];
+    const s = 0.01;
+    for (let y = 0; y <= 2.5; y += 0.02) {
+      for (let z = -2; z <= 0; z += s) p.push(-1, y, z);
+      for (let x = -3; x <= -1; x += s) p.push(x, y, 0);
+      for (let x = 0.5; x <= 2; x += s) if (y < 0.5 || y > 2.3) p.push(x, y, 1.2);
+    }
+    const shell = { fallback: false, ceilingY: 2.5, size: { width: 6, depth: 4, height: 2.5 } } as never;
+    const walls = findInnerWalls(Float32Array.from(p), shell, { cameras: [[1, 0.5], [0, -1], [1.5, -1.5]] });
+    expect(walls).toHaveLength(2);
+    const vertical = walls.find((w) => Math.abs(w.a[0] - w.b[0]) < 0.05)!;
+    expect(vertical.a[0]).toBeCloseTo(-1, 1);
+    expect(Math.abs(vertical.b[1] - vertical.a[1])).toBeGreaterThan(1.5);
+  });
+});

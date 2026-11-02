@@ -48,6 +48,8 @@ interface Restyle {
   models: string[];
   usage: string;
   createdAt: string;
+  /** The room as filmed, rebuilt in 3D (no new world). */
+  original?: boolean;
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -352,6 +354,11 @@ export class RoomshiftPanel {
       this.restyle = null;
       this.room.reset();
       this.room.clearModels();
+      const asFilmed = this.history.find((h) => h.original);
+      if (asFilmed) {
+        this.restyle = asFilmed;
+        this.apply(asFilmed);
+      }
       this.render();
     }
     if (a === 'replay') {
@@ -395,6 +402,7 @@ export class RoomshiftPanel {
       if (s.state !== 'reconstructing' && s.objectsStatus?.state !== 'running') {
         clearInterval(this.poll!);
         this.poll = null;
+        if (s.state === 'ready' && s.objectsStatus?.state === 'done') void this.showDefault();
       }
       this.render();
     };
@@ -411,12 +419,24 @@ export class RoomshiftPanel {
     this.frameRoom();
     // Bring back the most recent finished world for this room.
     this.history = (await call<{ restyles: Restyle[] }>(`/api/scans/${s.id}/restyles`).catch(() => ({ restyles: [] }))).restyles;
-    const last = this.history.find((h) => h.state === 'done');
+    const last = this.history.find((h) => h.state === 'done' && !h.original) ?? this.history.find((h) => h.original);
     if (last && !this.restyle) {
       this.origin = paintOrigin(this.world, s.shell ?? null);
       this.restyle = last;
       this.apply(last);
     }
+  }
+
+  /** With no world chosen, show (and follow) the room as filmed, rebuilt in 3D. */
+  private async showDefault() {
+    if (!this.scan || (this.restyle && !this.restyle.original)) return;
+    this.history = (await call<{ restyles: Restyle[] }>(`/api/scans/${this.scan.id}/restyles`).catch(() => ({ restyles: [] }))).restyles;
+    const asFilmed = this.history.find((h) => h.original);
+    if (!asFilmed || this.restyle?.id === asFilmed.id) return;
+    this.restyle = asFilmed;
+    this.apply(asFilmed);
+    if (asFilmed.state !== 'done' && asFilmed.state !== 'failed') this.followRestyle(asFilmed.id);
+    this.render();
   }
 
   private frameRoom() {
@@ -463,10 +483,14 @@ export class RoomshiftPanel {
 
   /** Push whatever has arrived into the 3D room (idempotent). */
   private apply(r: Restyle) {
+    for (const o of r.objects ?? []) {
+      if (o.state !== 'done') continue;
+      const done = o.format === 'plane' && o.image ? this.room.placeSurface(o.id, `${BASE}/api/textures/${o.image}`) : o.model && o.format === 'glb' ? this.room.placeModel(o.id, `${BASE}${o.model}`) : null;
+      void done?.catch((e) => console.warn(`${o.name} failed to load`, e));
+    }
     if (!r.plan) return;
     this.room.mood(r.plan.light, r.plan.fogHex);
     const from = this.origin ?? paintOrigin(this.world, this.scan?.shell ?? null);
-    for (const o of r.objects ?? []) if (o.state === 'done' && o.model && o.format === 'glb') void this.room.placeModel(o.id, `${BASE}${o.model}`).catch((e) => console.warn(`Model for ${o.name} failed to load`, e));
     for (const s of r.surfaces) {
       if (s.state !== 'done' || !s.texture) continue;
       const spec = r.plan.surfaces[s.id];

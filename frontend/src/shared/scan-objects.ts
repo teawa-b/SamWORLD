@@ -78,7 +78,7 @@ const Z_SLACK = 0.06; // metres behind the nearest surface still counted as visi
 const SHELL_TOL = 0.06;
 
 /** Inverse of a rigid row-major 4×4 (rotation + translation). */
-function invertRigid(m: number[]): number[] {
+export function invertRigid(m: number[]): number[] {
   const r = [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]];
   const t = [m[3], m[7], m[11]];
   return [
@@ -303,6 +303,75 @@ export function thickenFlatBox(box: ObjectBox, shell: RoomShell | null, viewFrom
   const size: [number, number, number] = [...box.size];
   size[axis] = depth;
   return { ...box, size, centre: [front[0] + (n[0] * depth) / 2, box.centre[1], front[1] + (n[1] * depth) / 2] };
+}
+
+/**
+ * The front face of a thin, upright object (door, picture, TV) as seen from `eye`: its four corners in the
+ * room frame (top-left, top-right, bottom-right, bottom-left as the viewer sees them), size, and the unit
+ * normal [x, z] pointing out of the wall towards the viewer. Null when the box isn't thin and upright.
+ */
+export function frontFace(box: ObjectBox, eye: readonly [number, number]): { corners: [number, number, number][]; width: number; height: number; normal: [number, number] } | null {
+  const [w, h, d] = box.size;
+  const thinAxis = w < d ? 0 : 2;
+  const thin = Math.min(w, d);
+  const width = Math.max(w, d);
+  if (thin > 0.3 || h < 0.1) return null;
+  const c = Math.cos(box.yaw), s = Math.sin(box.yaw);
+  const ax: [number, number] = [c, -s]; // local x in room [x, z]
+  const az: [number, number] = [s, c]; // local z
+  let n = thinAxis === 0 ? ax : az;
+  if ((eye[0] - box.centre[0]) * n[0] + (eye[1] - box.centre[2]) * n[1] < 0) n = [-n[0], -n[1]];
+  // Viewer looks along -n; their right is (-n) × up = (n.z, 0, -n.x).
+  const right: [number, number] = [n[1], -n[0]];
+  const fx = box.centre[0] + (n[0] * thin) / 2, fz = box.centre[2] + (n[1] * thin) / 2;
+  const top = box.centre[1] + h / 2, bottom = box.centre[1] - h / 2;
+  const at = (side: number, y: number): [number, number, number] => [fx + (right[0] * side * width) / 2, y, fz + (right[1] * side * width) / 2];
+  return { corners: [at(-1, top), at(1, top), at(1, bottom), at(-1, bottom)], width, height: h, normal: n };
+}
+
+/**
+ * Pixel position of a scan-frame point in a frame image of size frameW × frameH (uploaded frames are larger
+ * than MapAnything's input: width scaled, height centred, as in maskPoints). Null when behind the camera.
+ */
+export function projectToFrame(p: readonly number[], cam: LiftCamera, frameW: number, frameH: number): [number, number] | null {
+  const V = invertRigid(cam.pose);
+  const [fx, fy, cx, cy] = cam.intrinsics;
+  const x = V[0] * p[0] + V[1] * p[1] + V[2] * p[2] + V[3];
+  const y = V[4] * p[0] + V[5] * p[1] + V[6] * p[2] + V[7];
+  const d = -(V[8] * p[0] + V[9] * p[1] + V[10] * p[2] + V[11]);
+  if (d < 0.05) return null;
+  const s = frameW / cam.width;
+  return [((fx * x) / d + cx) * s, (cy - (fy * y) / d) * s + (frameH - cam.height * s) / 2];
+}
+
+/**
+ * Drop isolated points (MapAnything floaters): keep a point only when its 3 × 3 × 3 block of `cell`-sized
+ * voxels holds at least `minNeighbours` points. Returns the indices kept.
+ */
+export function strayFilter(positions: Float32Array, cell = 0.03, minNeighbours = 40): Uint32Array {
+  const n = positions.length / 3;
+  const K = 4096;
+  const key = (x: number, y: number, z: number) => (x + 2048) + (y + 2048) * K + (z + 2048) * K * K;
+  const counts = new Map<number, number>();
+  const keys = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const k = key(Math.floor(positions[i * 3] / cell), Math.floor(positions[i * 3 + 1] / cell), Math.floor(positions[i * 3 + 2] / cell));
+    keys[i] = k;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const near = new Map<number, number>();
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const k = keys[i];
+    let total = near.get(k);
+    if (total === undefined) {
+      total = 0;
+      for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) total += counts.get(k + dx + dy * K + dz * K * K) ?? 0;
+      near.set(k, total);
+    }
+    if (total >= minNeighbours) out.push(i);
+  }
+  return Uint32Array.from(out);
 }
 
 /** The detection whose crop shows the object best: big, confident and not cut off by the frame edge. */

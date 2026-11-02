@@ -58,9 +58,9 @@ export interface RestyleObject {
   state: 'pending' | 'restyling' | 'lifting' | 'done' | 'failed';
   /** Muse Image's restyled crop, under /api/textures/. */
   image: string | null;
-  /** SAM 3D model (GLB, or PLY splat) under /api/sam3d/. */
+  /** SAM 3D model (GLB, or PLY splat) under /api/sam3d/; null for surfaces, which show `image` on the wall. */
   model: string | null;
-  format: 'glb' | 'ply-splat' | 'ply-mesh' | null;
+  format: 'glb' | 'ply-splat' | 'ply-mesh' | 'plane' | null;
   error: string | null;
   seconds: number | null;
 }
@@ -87,6 +87,8 @@ export interface Restyle {
   surfaces: RestyleSurface[];
   /** Furniture restyled by Muse Image and rebuilt in 3D by SAM 3D (absent on older restyles). */
   objects?: RestyleObject[];
+  /** The room as filmed: furniture rebuilt by SAM 3D from the original photos, no new world. */
+  original?: boolean;
   /** True when MODEL_API_KEY is unset: the plan and textures are local placeholders, not Meta output. */
   offline: boolean;
   models: string[];
@@ -137,6 +139,10 @@ export interface ScanObject {
   bestFrame: number;
   /** three.js rotation.y that turns a model's front (+z) towards the camera of the clearest view. */
   facing?: number;
+  /** 'surface': flat on a wall (door, window, picture, TV, mirror), restyled as a picture on the wall; 'furniture': rebuilt by SAM 3D. */
+  kind?: 'furniture' | 'surface';
+  /** Surfaces: the face photographed straight-on (perspective removed), a file next to the crop. */
+  face?: string | null;
   /** Crop of the clearest view, served at /api/scans/:id/objects/:objectId/crop.jpg. */
   crop: string | null;
 }

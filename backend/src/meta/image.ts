@@ -42,6 +42,15 @@ export async function restyleImage(opts: { budget: AiBudget; imageDataUrl: strin
   return { ...(await generate(opts.budget, [{ type: 'input_text', text }, { type: 'input_image', image_url: opts.imageDataUrl }])), prompt: text };
 }
 
+/** Restyle a flat thing on a wall (door, window, picture) seen straight-on: the result is laid on the wall as is. */
+export async function restyleFlat(opts: { budget: AiBudget; imageDataUrl: string; instruction: string; subject: string }) {
+  const text =
+    `This is a ${opts.subject}, photographed straight-on. Repaint it: ${opts.instruction}. ` +
+    `It must still be a ${opts.subject} of exactly the same shape and proportions, seen perfectly straight-on and filling the whole image edge to edge, ` +
+    'with no wall, frame margin, perspective, people or text around it. Photorealistic.';
+  return { ...(await generate(opts.budget, [{ type: 'input_text', text }, { type: 'input_image', image_url: opts.imageDataUrl }])), prompt: text };
+}
+
 /** Kept for the old redesign route. */
 export async function redesignRoom(opts: { budget: AiBudget; photoDataUrl: string; instruction: string; roomLabel: string }) {
   const r = await restyleImage({ budget: opts.budget, imageDataUrl: opts.photoDataUrl, instruction: `${opts.instruction}. Keep walls, windows and doors where they are`, subject: opts.roomLabel });

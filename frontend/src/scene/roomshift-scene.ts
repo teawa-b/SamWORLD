@@ -19,6 +19,7 @@ import {
   BoxGeometry,
   BufferGeometry,
   CanvasTexture,
+  DoubleSide,
   Color,
   EdgesGeometry,
   Float32BufferAttribute,
@@ -46,7 +47,7 @@ import {
   type Texture,
   type World,
 } from '@iwsdk/core';
-import { decodeCloud, insideBox, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
+import { decodeCloud, frontFace, insideBox, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
 
 export type SurfaceId = 'walls' | 'floor' | 'ceiling';
 type Bucket = SurfaceId | 'stuff';
@@ -75,6 +76,8 @@ export interface RoomObject {
   box: ObjectBox;
   /** rotation.y that turns a model's front (+z) towards where the real piece was photographed from. */
   facing?: number;
+  /** 'surface': flat on a wall, shown as a picture laid on it. */
+  kind?: 'furniture' | 'surface';
 }
 
 const TOL = 0.1;
@@ -112,6 +115,8 @@ export class RoomScene {
   private models = new Map<string, { root: Group; url: string; grow: number }>();
   /** Scan points of the furniture, kept so pieces can be cut out when their model arrives. */
   private stuff: { p: Float32Array; c: Float32Array } | null = null;
+  /** Points that belong to no found object (clutter, inner walls): fade out once a world is painted. */
+  private loose: Points | null = null;
   private roomObjects: RoomObject[] = [];
   shell: RoomShell | null = null;
 
@@ -141,7 +146,7 @@ export class RoomScene {
         const dz = D / 2 - Math.abs(q[2]);
         if (q[1] < TOL) b = 'floor';
         else if (q[1] > H - TOL) b = 'ceiling';
-        else if (dx < TOL || dz < TOL) b = 'walls';
+        else if (dx < TOL || dz < TOL || nearInner(shell!, q)) b = 'walls';
       }
       buckets[b].p.push(q[0], q[1], q[2]);
       buckets[b].c.push(pc.colors[i * 3], pc.colors[i * 3 + 1], pc.colors[i * 3 + 2]);
@@ -257,9 +262,13 @@ export class RoomScene {
         pts.visible = m.opacity > 0.02;
       }
     }
-    if (this.outline) {
-      const anyPaint = [...this.surfaces.values()].some((s) => s.painted);
-      this.outline.visible = !anyPaint;
+    const anyPaint = [...this.surfaces.values()].some((s) => s.painted);
+    if (this.outline) this.outline.visible = !anyPaint;
+    if (this.loose) {
+      const m = this.loose.material as PointsMaterial;
+      m.transparent = true;
+      m.opacity += ((anyPaint ? 0 : 1) - m.opacity) * Math.min(1, dt * 2);
+      this.loose.visible = m.opacity > 0.02;
     }
   }
 
@@ -270,6 +279,7 @@ export class RoomScene {
     this.objectKey = key;
     this.clearObjects();
     this.roomObjects = list;
+    this.cutStuff();
     for (const o of list) {
       const root = new Group();
       root.name = `Object_${o.id}`;
@@ -320,6 +330,34 @@ export class RoomScene {
     this.cutStuff();
   }
 
+  /** Show a flat thing (door, window, picture) as an image laid on its wall, exactly over the real one. */
+  async placeSurface(id: string, url: string) {
+    const o = this.roomObjects.find((x) => x.id === id);
+    if (!o || this.models.get(id)?.url === url) return;
+    const dir = o.facing ?? 0;
+    const face = frontFace(o.box, [o.box.centre[0] + Math.sin(dir), o.box.centre[2] + Math.cos(dir)]);
+    if (!face) return;
+    this.removeModel(id);
+    const slot = { root: new Group(), url, grow: 0 };
+    this.models.set(id, slot);
+    let tex = this.textures.get(url);
+    if (!tex) {
+      tex = this.loader.loadAsync(url).then((t) => ((t.colorSpace = SRGBColorSpace), t));
+      this.textures.set(url, tex);
+    }
+    const t = await tex;
+    if (this.models.get(id) !== slot) return;
+    const m = new Mesh(new PlaneGeometry(face.width, face.height), new MeshStandardMaterial({ map: t, roughness: 0.75, metalness: 0 }));
+    m.rotation.y = Math.atan2(face.normal[0], face.normal[1]);
+    const thin = Math.min(o.box.size[0], o.box.size[2]);
+    slot.root.position.set(o.box.centre[0] + face.normal[0] * (thin / 2 + 0.008), o.box.centre[1], o.box.centre[2] + face.normal[1] * (thin / 2 + 0.008));
+    slot.root.add(m);
+    slot.root.scale.setScalar(0.001);
+    slot.root.name = `Surface_${id}`;
+    this.group.add(slot.root);
+    this.cutStuff();
+  }
+
   /** Back to the scanned piece. */
   removeModel(id: string) {
     const m = this.models.get(id);
@@ -333,23 +371,36 @@ export class RoomScene {
     for (const id of [...this.models.keys()]) this.removeModel(id);
   }
 
-  /** Rebuild the furniture points without those inside boxes that now show a model. */
+  /**
+   * Split the furniture points: inside a box that now shows a model → dropped; inside another found object →
+   * kept; in no object at all → `loose` (clutter, inner walls), which fades out in a painted world.
+   */
   private cutStuff() {
     const pts = this.points.get('stuff');
     if (!pts || !this.stuff) return;
-    const boxes = this.roomObjects.filter((o) => this.models.get(o.id)?.root.parent).map((o) => o.box);
+    const shown = this.roomObjects.filter((o) => this.models.get(o.id)?.root.parent).map((o) => o.box);
+    const found = this.roomObjects.map((o) => o.box);
     const { p, c } = this.stuff;
-    const keepP: number[] = [];
-    const keepC: number[] = [];
+    const keep: number[][] = [[], []];
+    const loose: number[][] = [[], []];
     for (let i = 0; i < p.length; i += 3) {
       const q = [p[i], p[i + 1], p[i + 2]];
-      if (boxes.some((b) => insideBox(b, q, 0.03))) continue;
-      keepP.push(q[0], q[1], q[2]);
-      keepC.push(c[i], c[i + 1], c[i + 2]);
+      if (shown.some((b) => insideBox(b, q, 0.03))) continue;
+      const to = !found.length || found.some((b) => insideBox(b, q, 0.05)) ? keep : loose;
+      to[0].push(q[0], q[1], q[2]);
+      to[1].push(c[i], c[i + 1], c[i + 2]);
     }
-    pts.geometry.setAttribute('position', new Float32BufferAttribute(keepP, 3));
-    pts.geometry.setAttribute('color', new Float32BufferAttribute(keepC, 3));
+    pts.geometry.setAttribute('position', new Float32BufferAttribute(keep[0], 3));
+    pts.geometry.setAttribute('color', new Float32BufferAttribute(keep[1], 3));
     pts.geometry.computeBoundingSphere();
+    if (!this.loose) {
+      this.loose = new Points(new BufferGeometry(), (pts.material as PointsMaterial).clone());
+      this.loose.name = 'ScanPoints_loose';
+      this.group.add(this.loose);
+    }
+    this.loose.geometry.setAttribute('position', new Float32BufferAttribute(loose[0], 3));
+    this.loose.geometry.setAttribute('color', new Float32BufferAttribute(loose[1], 3));
+    this.loose.geometry.computeBoundingSphere();
   }
 
   /** Emphasise one object (or none). */
@@ -378,7 +429,7 @@ export class RoomScene {
 
   /** Collision segments for walking ([x, z] pairs), or [] without a shell. */
   wallSegments(): [[number, number], [number, number]][] {
-    return this.shell && !this.shell.fallback ? this.shell.walls.map((w) => [w.a, w.b]) : [];
+    return this.shell && !this.shell.fallback ? [...this.shell.walls, ...(this.shell.inner ?? [])].map((w) => [w.a, w.b]) : [];
   }
 
   /** Centre and span for framing the orbit camera. */
@@ -400,6 +451,12 @@ export class RoomScene {
   clear() {
     this.clearModels();
     this.stuff = null;
+    if (this.loose) {
+      this.loose.geometry.dispose();
+      (this.loose.material as PointsMaterial).dispose();
+      this.loose.removeFromParent();
+      this.loose = null;
+    }
     this.clearObjects();
     this.objectKey = '';
     this.entity?.dispose();
@@ -460,12 +517,14 @@ export class RoomScene {
         }
         const tex = fillHoles(sum, cnt, tw, th);
         if (!tex) continue;
-        const mat = new MeshBasicMaterial({ map: tex });
+        const inner = !!m.userData.inner;
+        const mat = new MeshBasicMaterial({ map: tex, side: inner ? DoubleSide : undefined });
         const b = new Mesh(m.geometry, mat);
         b.position.copy(m.position);
         b.rotation.copy(m.rotation);
-        // Push it slightly behind the paint plane (planes face +z locally, into the room).
-        b.position.add(new Vector3(0, 0, -BASE_OFFSET).applyEuler(m.rotation));
+        // Push it slightly behind the paint plane (planes face +z locally, into the room); inner walls are seen
+        // from both sides, so theirs stays in the plane and the paint's polygon offset puts the paint in front.
+        if (!inner) b.position.add(new Vector3(0, 0, -BASE_OFFSET).applyEuler(m.rotation));
         b.name = `BaseCoat_${m.name}`;
         this.coated.add(id);
         this.base.push(b);
@@ -505,6 +564,22 @@ export class RoomScene {
       m.rotation.y = Math.atan2(w.normal[0], w.normal[1]);
       m.userData.length = len;
       m.name = `Shell_wall_${i}`;
+      walls.meshes.push(m);
+    }
+    // Inner walls (an L-shaped room's inner corner): seen from both sides; the paint wins over the base coat.
+    for (const [i, w] of (this.shell!.inner ?? []).entries()) {
+      const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+      const mat = cloneReveal(walls);
+      mat.side = DoubleSide;
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = -2;
+      mat.polygonOffsetUnits = -2;
+      const m = new Mesh(new PlaneGeometry(len, H), mat);
+      m.position.set((w.a[0] + w.b[0]) / 2, H / 2, (w.a[1] + w.b[1]) / 2);
+      m.rotation.y = Math.atan2(-(w.b[1] - w.a[1]), w.b[0] - w.a[0]);
+      m.userData.length = len;
+      m.userData.inner = true;
+      m.name = `Shell_inner_${i}`;
       walls.meshes.push(m);
     }
     for (const s of this.surfaces.values()) for (const m of s.meshes) this.group.add(m);
@@ -567,6 +642,18 @@ function revealMaterial(reveal: { value: number }, origin: { value: Vector3 }): 
   };
   mat.customProgramCacheKey = () => 'roomshift-reveal';
   return mat;
+}
+
+/** True when a room-frame point lies on one of the shell's inner walls. */
+function nearInner(shell: RoomShell, q: readonly number[]): boolean {
+  for (const w of shell.inner ?? []) {
+    const dx = w.b[0] - w.a[0], dz = w.b[1] - w.a[1];
+    const len = Math.hypot(dx, dz) || 1;
+    const t = ((q[0] - w.a[0]) * dx + (q[2] - w.a[1]) * dz) / (len * len);
+    if (t < -0.02 || t > 1.02) continue;
+    if (Math.abs((q[0] - w.a[0]) * dz - (q[2] - w.a[1]) * dx) / len < TOL) return true;
+  }
+  return false;
 }
 
 /**

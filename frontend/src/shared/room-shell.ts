@@ -37,6 +37,16 @@ export interface RoomShell {
   /** Fitting went badly (no floor, or fewer than two walls seen): show the raw points instead of the shell. */
   fallback: boolean;
   diagnostics: string[];
+  /** Walls inside the box (the inner corner of an L-shaped room, a partition): seen from both sides. */
+  inner?: InnerWall[];
+}
+
+export interface InnerWall {
+  /** Ends on the floor, [x, z] in the room frame; the wall runs floor to ceiling. */
+  a: [number, number];
+  b: [number, number];
+  /** Points within 4 cm of its plane. */
+  support: number;
 }
 
 export interface FitShellOptions {
@@ -465,3 +475,98 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 const round = (v: number) => Math.round(v * 1000) / 1000;
 const r2 = (p: [number, number]): [number, number] => [round(p[0]), round(p[1])];
 const deg = (r: number) => Math.round((r * 1800) / Math.PI) / 10;
+
+/**
+ * Walls standing inside the fitted box: on each axis, layers of points (room frame) that run from near the
+ * floor to near the ceiling for at least `minLength`, away from the outer walls. Furniture rarely reaches
+ * the ceiling, so a tall wardrobe front isn't mistaken for one; and nobody walks through a wall, so a layer
+ * with camera positions on both sides of it along its length (a drifted copy of another wall) is dropped.
+ */
+export function findInnerWalls(room: Float32Array, shell: RoomShell, opts: { minLength?: number; cameras?: [number, number][] } = {}): InnerWall[] {
+  if (shell.fallback) return [];
+  const minLength = opts.minLength ?? 0.8;
+  const H = shell.ceilingY;
+  // Stay clear of the outer walls: curtains, door frames and wardrobes stand within a few decimetres of them.
+  const W2 = shell.size.width / 2 - 0.35;
+  const D2 = shell.size.depth / 2 - 0.35;
+  const out: InnerWall[] = [];
+  for (const axis of [0, 2] as const) {
+    const other = axis === 0 ? 2 : 0;
+    const lim = axis === 0 ? W2 : D2;
+    const olim = axis === 0 ? D2 + 0.35 : W2 + 0.35;
+    const BIN = 0.02;
+    const bins = new Float64Array(Math.max(1, Math.ceil((2 * lim) / BIN)));
+    let band = 0;
+    for (let i = 0; i < room.length; i += 3) {
+      const y = room[i + 1];
+      if (y < 0.3 || y > H - 0.3) continue;
+      const v = room[i + axis];
+      if (Math.abs(v) >= lim || Math.abs(room[i + other]) > olim) continue;
+      band++;
+      bins[Math.floor((v + lim) / BIN)]++;
+    }
+    const sm = smooth(bins);
+    const thr = Math.max(0.01 * band, 300);
+    const peaks: number[] = [];
+    for (let i = 0; i < sm.length; i++) if (sm[i] >= thr && sm[i] >= (sm[i - 1] ?? 0) && sm[i] >= (sm[i + 1] ?? 0) && !peaks.some((p) => Math.abs(p - i) * BIN < 0.15)) peaks.push(i);
+    for (const pk of peaks) {
+      const c = -lim + (pk + 0.5) * BIN;
+      const along: number[] = [];
+      const ys: number[] = [];
+      for (let i = 0; i < room.length; i += 3) {
+        const y = room[i + 1];
+        // Floor and ceiling points lie on every line; only the wall's own points count.
+        if (y < 0.06 || y > H - 0.06 || Math.abs(room[i + axis] - c) > 0.04 || Math.abs(room[i + other]) > olim) continue;
+        ys.push(y);
+        if (y > 0.3 && y < H - 0.3) along.push(room[i + other]);
+      }
+      if (along.length < thr) continue;
+      const yS = sorted(Float64Array.from(ys));
+      if (pct(yS, 0.03) > 0.35 || pct(yS, 0.97) < H - 0.5) continue; // must run floor to (near) ceiling
+      // Longest run of the layer without a gap over 20 cm.
+      const s2 = sorted(Float64Array.from(along));
+      let best = [0, 0];
+      let start = 0;
+      for (let k = 1; k <= s2.length; k++) {
+        if (k === s2.length || s2[k] - s2[k - 1] > 0.2) {
+          if (s2[k - 1] - s2[start] > best[1] - best[0]) best = [s2[start], s2[k - 1]];
+          start = k;
+        }
+      }
+      if (best[1] - best[0] < minLength) continue;
+      const lo = Math.max(-olim, best[0]), hi = Math.min(olim, best[1]);
+      // A wall fills its middle too: at 0.9–1.7 m it must cover at least half its length (a bed's foot under
+      // the edge of a ceiling cove reaches "floor to ceiling" but is empty in between).
+      const cells = new Uint8Array(Math.max(1, Math.ceil((hi - lo) / 0.1)));
+      for (let i = 0; i < room.length; i += 3) {
+        const y = room[i + 1];
+        if (y < 0.9 || y > 1.7 || Math.abs(room[i + axis] - c) > 0.04) continue;
+        const o = room[i + other];
+        if (o >= lo && o < hi) cells[Math.floor((o - lo) / 0.1)] = 1;
+      }
+      if (cells.reduce((t, v) => t + v, 0) < 0.5 * cells.length) continue;
+      const sides = new Set<number>();
+      for (const cam of opts.cameras ?? []) {
+        const along = axis === 0 ? cam[1] : cam[0];
+        const across = (axis === 0 ? cam[0] : cam[1]) - c;
+        if (along > lo - 0.2 && along < hi + 0.2 && Math.abs(across) > 0.1) sides.add(Math.sign(across));
+      }
+      if (sides.size > 1) continue;
+      // A wall has fairly open space on at least one side; a layer inside a cluttered region (a bed, drifted
+      // copies of a wall) has points crowding both.
+      const crowd = [0, 0];
+      for (let i = 0; i < room.length; i += 3) {
+        const y = room[i + 1];
+        if (y < 0.3 || y > H - 0.3) continue;
+        const o = room[i + other];
+        if (o < lo || o > hi) continue;
+        const d = room[i + axis] - c;
+        if (Math.abs(d) > 0.1 && Math.abs(d) < 0.6) crowd[d < 0 ? 0 : 1]++;
+      }
+      // Real walls measured 0.3–1.1× their own points on the quieter side; drifted copies inside a bed 2.8–5×.
+      if (Math.min(crowd[0], crowd[1]) > 2 * along.length) continue;
+      out.push(axis === 0 ? { a: [c, lo], b: [c, hi], support: along.length } : { a: [lo, c], b: [hi, c], support: along.length });
+    }
+  }
+  return out;
+}
