@@ -218,8 +218,17 @@ export function fitRoomShell(positions: Float32Array | number[], opts: FitShellO
   const sinY = Math.sin(yaw);
   const U = wx.map((x, i) => x * cosY + wz[i] * sinY);
   const Vv = wx.map((x, i) => -x * sinY + wz[i] * cosY);
-  const wu = findWalls(U);
-  const wv = findWalls(Vv);
+  // Where the phone was: the room must contain every camera, so a wall can't sit between them.
+  const camU: number[] = [];
+  const camV: number[] = [];
+  for (const c of opts.cameras ?? []) {
+    if (c.pose?.length !== 16) continue;
+    const p = apply(F, [c.pose[3], c.pose[7], c.pose[11]]);
+    camU.push(p[0] * cosY + p[2] * sinY);
+    camV.push(-p[0] * sinY + p[2] * cosY);
+  }
+  const wu = findWalls(U, camU);
+  const wv = findWalls(Vv, camV);
   const walls = { u: wu, v: wv };
   const cu = (wu.lo.at + wu.hi.at) / 2;
   const cv = (wv.lo.at + wv.hi.at) / 2;
@@ -248,7 +257,14 @@ interface WallHit {
   inferred: boolean;
 }
 
-function findWalls(vals: number[]): { lo: WallHit; hi: WallHit } {
+/**
+ * The two walls along one axis. Candidates are the strong layers of points beyond where the cameras stood
+ * (or beyond the middle when there are no cameras). On each side the outermost layer at least 40% as strong
+ * as that side's strongest wins: outermost so furniture fronts don't pass for walls, but not a short alcove
+ * wall when a long one stands in front of it. No layer beyond the cameras → the wall is inferred from the
+ * extent of the points.
+ */
+function findWalls(vals: number[], cams: number[] = []): { lo: WallHit; hi: WallHit } {
   const s = sorted(Float64Array.from(vals));
   const lo0 = pct(s, 0.005) - 0.15;
   const hi0 = pct(s, 0.995) + 0.15;
@@ -260,19 +276,27 @@ function findWalls(vals: number[]): { lo: WallHit; hi: WallHit } {
   let max = 0;
   for (const c of sm) max = Math.max(max, c);
   const thr = Math.max(0.12 * max, 20);
-  const peaks: number[] = [];
-  for (let i = 0; i < sm.length; i++) if (sm[i] >= thr && sm[i] >= (sm[i - 1] ?? 0) && sm[i] >= (sm[i + 1] ?? 0)) peaks.push(lo0 + (i + 0.5) * BIN);
+  const peaks: { at: number; w: number }[] = [];
+  for (let i = 0; i < sm.length; i++) if (sm[i] >= thr && sm[i] >= (sm[i - 1] ?? 0) && sm[i] >= (sm[i + 1] ?? 0)) peaks.push({ at: lo0 + (i + 0.5) * BIN, w: sm[i] });
   const refine = (c: number): WallHit => {
     let t = 0;
     let n = 0;
     for (const v of vals) if (Math.abs(v - c) < WALL_TOL) (t += v), n++;
     return { at: n ? t / n : c, support: n, inferred: false };
   };
-  const low = peaks.filter((p) => p < mid);
-  const high = peaks.filter((p) => p > mid);
+  const CAM_GAP = 0.15;
+  const camLo = cams.length ? Math.min(...cams) - CAM_GAP : mid;
+  const camHi = cams.length ? Math.max(...cams) + CAM_GAP : mid;
+  const pick = (cands: { at: number; w: number }[], outermostFirst: boolean) => {
+    const strongest = Math.max(...cands.map((p) => p.w));
+    const ordered = outermostFirst ? cands : [...cands].reverse();
+    return ordered.find((p) => p.w >= 0.4 * strongest)!;
+  };
+  const low = peaks.filter((p) => p.at < Math.min(mid, camLo));
+  const high = peaks.filter((p) => p.at > Math.max(mid, camHi));
   return {
-    lo: low.length ? refine(low[0]) : { at: pct(s, 0.01), support: 0, inferred: true },
-    hi: high.length ? refine(high[high.length - 1]) : { at: pct(s, 0.99), support: 0, inferred: true },
+    lo: low.length ? refine(pick(low, true).at) : { at: Math.min(pct(s, 0.01), camLo - 0.15), support: 0, inferred: true },
+    hi: high.length ? refine(pick(high, false).at) : { at: Math.max(pct(s, 0.99), camHi + 0.15), support: 0, inferred: true },
   };
 }
 

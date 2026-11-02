@@ -80,3 +80,34 @@ describe('fitRoomShell', () => {
     expect(s.walls).toHaveLength(0);
   });
 });
+
+describe('fitRoomShell with cameras', () => {
+  // 4 × 3 m room, plus a 1 m wide alcove behind the z = 0 wall (to z = -1), and the x = 0 wall never filmed.
+  const pts: number[][] = [];
+  const s = 0.05;
+  for (let x = 0; x <= 4; x += s) for (let z = 0; z <= 3; z += s) pts.push([x, 0, z]);
+  for (let x = 3; x <= 4; x += s) for (let z = -1; z < 0; z += s) pts.push([x, 0, z]);
+  for (let y = 0; y <= 2.4; y += s) {
+    for (let x = 0; x <= 4; x += s) pts.push([x, y, 3]);
+    for (let x = 0; x <= 3; x += s) pts.push([x, y, 0]);
+    for (let x = 3; x <= 4; x += s) pts.push([x, y, -1]);
+    for (let z = -1; z <= 0; z += s) pts.push([3, y, z]);
+    for (let z = -1; z <= 3; z += s) pts.push([4, y, z]);
+  }
+  const cam = (x: number, z: number) => ({ pose: [1, 0, 0, x, 0, 1, 0, 1.5, 0, 0, 1, z, 0, 0, 0, 1] });
+  const cameras = [cam(0.6, 1), cam(0.8, 2), cam(1.5, 1.5)];
+
+  it('keeps the long wall over a short alcove behind it, and never puts a wall between the cameras', () => {
+    const sh = fitRoomShell(flat(pts), { cameras });
+    expect(sh.fallback).toBe(false);
+    const inside = cameras.map((c) => transformPointRowMajor(sh.alignment, [c.pose[3], 1.5, c.pose[11]]));
+    for (const p of inside) {
+      expect(Math.abs(p[0])).toBeLessThan(sh.size.width / 2);
+      expect(Math.abs(p[2])).toBeLessThan(sh.size.depth / 2);
+    }
+    // Depth along z: the z = 0 wall (3 m long) wins over the alcove's z = -1 wall (1 m long).
+    const dims = [sh.size.width, sh.size.depth].sort();
+    expect(dims.some((d) => Math.abs(d - 3) < 0.15)).toBe(true);
+    expect(sh.walls.filter((w) => w.inferred)).toHaveLength(1);
+  });
+});
