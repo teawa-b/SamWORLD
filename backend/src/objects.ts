@@ -23,6 +23,7 @@ import {
   mergeDetections,
   onShell,
   parsePly,
+  pickKeyframes,
   roomPoint,
   thickenFlatBox,
   transformPointRowMajor,
@@ -32,10 +33,12 @@ import {
 } from './shared/index.js';
 import { store, type Scan, type ScanObject } from './store.js';
 
-export const OBJECTS_PROMPT_VERSION = 'roomshift-objects-v1';
-const KEYFRAMES = 6;
-const MAX_CONCEPTS = 8;
-const MAX_OBJECTS = 12;
+export const OBJECTS_PROMPT_VERSION = 'roomshift-objects-v2';
+/** Frames SAM looks at (chosen to cover the room's directions) and frames Muse looks at (spread over the video). */
+const KEYFRAMES = 10;
+const MUSE_FRAMES = 8;
+const MAX_CONCEPTS = 12;
+const MAX_OBJECTS = 16;
 const MIN_DETECTION_POINTS = 30;
 const MIN_OBJECT_POINTS = 120;
 
@@ -64,8 +67,9 @@ export const metaDeps: UnderstandDeps = {
     const { data, model } = await museJson<{ objects: { concept: string }[] }>({
       budget,
       system:
-        'You are looking at photos of one real room taken from different spots. List the distinct pieces of furniture and large objects in it ' +
-        '(sofa, bed, table, chair, bookshelf, cabinet, desk, lamp, TV, rug, plant, ...). Skip walls, floor, ceiling, windows, doors, small clutter and anything smaller than a shoe box. ' +
+        'You are looking at photos of one real room taken from different spots. List the distinct pieces of furniture and large objects in it, ' +
+        'including things on the walls or floor: sofa, bed, table, chair, wardrobe, bookshelf, cabinet, desk, bench, nightstand, lamp, TV, mirror, painting, ' +
+        'rug, curtain, plant, air conditioner, suitcase, ... Skip the walls, floor and ceiling themselves, windows, doors, loose clothes, small clutter and anything smaller than a shoe box. ' +
         `Each \`concept\` is a short singular noun phrase an image segmenter can find, e.g. "sofa", "floor lamp", "coffee table". At most ${MAX_CONCEPTS}, largest first, no duplicates. Return JSON only.`,
       text: 'The room:',
       images,
@@ -131,11 +135,17 @@ export function decodeRuns(runs: number[], length: number): Uint8Array {
 
 /** Wrap the Meta calls with a per-scan disk cache (successes only). */
 function cached(scan: Scan, deps: UnderstandDeps): UnderstandDeps {
-  const dir = join(scanDir(scan.id), 'objects-cache', OBJECTS_PROMPT_VERSION);
-  const read = async <T>(f: string): Promise<T | null> => (existsSync(join(dir, f)) ? JSON.parse(await readFile(join(dir, f), 'utf8')) : null);
+  // Muse's list depends on the prompt version; a SAM mask only on the frame and the concept, so it's shared.
+  const base = join(scanDir(scan.id), 'objects-cache');
+  const at = (f: string) => join(base, f.startsWith('sam-') ? 'sam' : OBJECTS_PROMPT_VERSION, f);
+  const read = async <T>(f: string): Promise<T | null> => {
+    // SAM masks from before the split lived under the v1 folder.
+    const p = [at(f), ...(f.startsWith('sam-') ? [join(base, 'roomshift-objects-v1', f)] : [])].find((x) => existsSync(x));
+    return p ? JSON.parse(await readFile(p, 'utf8')) : null;
+  };
   const write = async (f: string, v: unknown) => {
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, f), JSON.stringify(v));
+    await mkdir(join(at(f), '..'), { recursive: true });
+    await writeFile(at(f), JSON.stringify(v));
   };
   return {
     async listObjects(images, budget) {
@@ -168,7 +178,7 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
   deps = cached(scan, deps);
   try {
     const n = Math.min(scan.frames.length, scan.cameras.length);
-    const picks = [...new Set(Array.from({ length: Math.min(KEYFRAMES, n) }, (_, i) => Math.floor(((i + 0.5) / Math.min(KEYFRAMES, n)) * n)))];
+    const picks = pickKeyframes(scan.cameras.slice(0, n), KEYFRAMES);
     const frames = await Promise.all(
       picks.map(async (i) => {
         const buf = await readFile(join(scanDir(scan.id), scan.frames[i].file));
@@ -177,7 +187,9 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
     );
 
     await status('running', 'Muse Spark is looking for furniture…');
-    const listed = await deps.listObjects(frames.slice(0, 4).map((f) => f.url), budget);
+    const museIdx = [...new Set(Array.from({ length: Math.min(MUSE_FRAMES, scan.frames.length) }, (_, i) => Math.floor(((i + 0.5) / Math.min(MUSE_FRAMES, scan.frames.length)) * scan.frames.length)))];
+    const museUrls = await Promise.all(museIdx.map(async (i) => dataUrl(await readFile(join(scanDir(scan.id), scan.frames[i].file)), scan.frames[i].file)));
+    const listed = await deps.listObjects(museUrls, budget).catch(() => deps.listObjects(museUrls.filter((_, k) => k % 2 === 0), budget));
     const concepts = [...new Set(listed.concepts.map((c) => c.trim().toLowerCase()).filter((c) => c && c.length <= 40))].slice(0, MAX_CONCEPTS);
     if (!concepts.length) return status('done', 'Muse Spark found no furniture to outline.', budget.summary());
 
@@ -209,13 +221,18 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       const cam = scan.cameras[f.i];
       if (!pix.has(f.i)) pix.set(f.i, visiblePixels(pc.positions, cam));
       for (const d of dets) {
-        const pts = maskPoints(pix.get(f.i)!, cam, d.mask, (k) => free[k] === 1);
         let area = 0;
         for (const v of d.mask.raster) area += v;
+        // Off-shell points by default; but a picture, mirror or rug lies on the shell itself, so when most of a
+        // small mask's points are shell points, keep them all.
+        const all = maskPoints(pix.get(f.i)!, cam, d.mask);
+        const off = all.filter((k) => free[k] === 1);
+        const flat = off.length < 0.25 * all.length && area < 0.25 * f.size.width * f.size.height;
+        const pts = flat ? all : off;
         const [l, t, r, b] = d.bbox;
         const m = 0.01 * Math.max(f.size.width, f.size.height);
         const edge = [l < m, t < m, r > f.size.width - m, b > f.size.height - m].filter(Boolean).length / 4;
-        lifted.push({ label: concept, score: d.score, points: Uint32Array.from(pts), frame: f.i, edge, area: area / (f.size.width * f.size.height), bbox: d.bbox });
+        lifted.push({ label: concept, score: d.score, points: Uint32Array.from(pts), frame: f.i, edge, area: area / (f.size.width * f.size.height), bbox: d.bbox, flat });
       }
     });
 
@@ -228,7 +245,8 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       counts.set(o.label, nth);
       const view = bestView(o.detections);
       const eye = transformPointRowMajor(align, [scan.cameras[view.frame].pose[3], scan.cameras[view.frame].pose[7], scan.cameras[view.frame].pose[11]]);
-      const box = thickenFlatBox(o.box, shell, [eye[0], eye[2]]);
+      const flat = o.detections.filter((d) => d.flat).length * 2 > o.detections.length;
+      const box = flat ? o.box : thickenFlatBox(o.box, shell, [eye[0], eye[2]]);
       const id = `obj-${objects.length + 1}`;
       const frame = frames.find((f) => f.i === view.frame)!;
       let crop: string | null = null;

@@ -170,3 +170,16 @@ describe('object clean-up', () => {
     expect([...decodeRuns(encodeRuns(r), r.length)]).toEqual([...r]);
   });
 });
+
+describe('keyframes', () => {
+  it('spreads picks over headings and spots, not just time', async () => {
+    const { pickKeyframes } = await import('../src/shared/index.js');
+    // 20 frames: 15 looking the same way from one spot, then 5 turning round.
+    const cam = (yaw: number, x = 0) => ({ pose: [Math.cos(yaw), 0, Math.sin(yaw), x, 0, 1, 0, 1.5, -Math.sin(yaw), 0, Math.cos(yaw), 0, 0, 0, 0, 1] });
+    const cams = [...Array.from({ length: 15 }, () => cam(0)), ...[1, 2, 3, 4, 5].map((k) => cam((k * Math.PI) / 3))];
+    const picks = pickKeyframes(cams, 4);
+    expect(picks).toHaveLength(4);
+    expect(picks.filter((i) => i >= 15).length).toBeGreaterThanOrEqual(3);
+    expect(pickKeyframes(cams.slice(0, 3), 6)).toEqual([0, 1, 2]);
+  });
+});

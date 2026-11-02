@@ -46,6 +46,31 @@ export interface LiftedDetection {
   area: number;
   /** Pixel box in the frame, [left, top, right, bottom]. */
   bbox: [number, number, number, number];
+  /** Lies flat on the shell (a picture or mirror on a wall, a rug on the floor): shell points were kept. */
+  flat?: boolean;
+}
+
+/**
+ * Pick up to `n` frames that see the room from as many directions and spots as possible: greedy
+ * farthest-first on the camera's heading (45° counts as 1) plus its position (1 m counts as 1).
+ * Returns frame indices in capture order.
+ */
+export function pickKeyframes(cameras: { pose: number[] }[], n: number): number[] {
+  if (cameras.length <= n) return cameras.map((_, i) => i);
+  const views = cameras.map((c) => ({ yaw: Math.atan2(-c.pose[2], -c.pose[10]), x: c.pose[3], z: c.pose[11] }));
+  const gap = (a: (typeof views)[number], b: (typeof views)[number]) => {
+    const d = Math.abs(Math.atan2(Math.sin(a.yaw - b.yaw), Math.cos(a.yaw - b.yaw)));
+    return d / (Math.PI / 4) + Math.hypot(a.x - b.x, a.z - b.z);
+  };
+  const chosen = [Math.floor(cameras.length / 2)];
+  const near = views.map((v) => gap(v, views[chosen[0]]));
+  while (chosen.length < n) {
+    let best = -1;
+    for (let i = 0; i < views.length; i++) if (!chosen.includes(i) && (best < 0 || near[i] > near[best])) best = i;
+    chosen.push(best);
+    for (let i = 0; i < views.length; i++) near[i] = Math.min(near[i], gap(views[i], views[best]));
+  }
+  return chosen.sort((a, b) => a - b);
 }
 
 const ZBUF_CELL = 4; // camera pixels per z-buffer cell
