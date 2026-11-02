@@ -12,6 +12,7 @@ import { changeLevel, enterRoom, exitRoom } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
 import type { Sheet } from './sheet.js';
 import { ImportFlow } from './importer.js';
+import { takeCollected } from './bookmarklet.js';
 import { PlanEditor } from './plan-editor.js';
 import { PhotoViewer } from './photos.js';
 import { Minimap } from './minimap.js';
@@ -151,6 +152,11 @@ export class Panel {
     this.realtyNotice = h?.realtyApi.available === false ? h.realtyApi.reason : '';
     this.renderStatus();
     if (!staticMode) this.sam3dReason = (await api.sam3dStatus().catch(() => ({ reason: '' }))).reason;
+    const collected = takeCollected();
+    if (collected) {
+      this.flow.collected = collected;
+      return this.go({ name: 'import' });
+    }
     const pid = new URLSearchParams(location.search).get('property');
     if (pid) await this.openProperty(pid, true).catch(() => this.go({ name: 'import' }));
     else this.go({ name: 'import' });

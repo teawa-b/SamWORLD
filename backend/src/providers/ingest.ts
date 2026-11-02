@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import type { Property, PropertyMedia } from '../shared/index.js';
 import { config } from '../config.js';
 import { imageSize } from '../lib/image.js';
+import { drawingScore } from '../lib/drawing.js';
 import { safeFetch, type Fetcher } from '../lib/safe-fetch.js';
 import { store } from '../store.js';
 import { extractListing, type CandidateImage, type ExtractedListing } from './listing-url.js';
@@ -122,7 +123,9 @@ export async function addImage(
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${hash.slice(0, 24)}.${ext}`), buf);
   const hint = hintFromName(opts.filename ?? opts.sourceUrl ?? '');
-  const type = opts.type ?? (hint.floorplan ? 'floorplan' : 'photo');
+  // Not named as a plan? Look at the pixels: plans are flat line drawings.
+  const drawn = !opts.type && !hint.floorplan ? drawingScore(buf)?.plan === true : false;
+  const type = opts.type ?? (hint.floorplan || drawn ? 'floorplan' : 'photo');
   const media: PropertyMedia = {
     id,
     propertyId: property.id,
@@ -145,7 +148,7 @@ export async function addImage(
       rightsBasis: 'user-confirmed',
       ...(opts.filename ? { originalFilename: opts.filename.slice(0, 200) } : {}),
       ...(opts.evidence ? { importEvidence: opts.evidence } : {}),
-      ...(!opts.type && hint.floorplan ? { typeSource: 'name-heuristic' } : opts.type ? { typeSource: opts.via === 'listing-url' ? 'listing-page' : 'user' } : {}),
+      ...(!opts.type && hint.floorplan ? { typeSource: 'name-heuristic' } : drawn ? { typeSource: 'looks-like-a-drawing' } : opts.type ? { typeSource: opts.via === 'listing-url' ? 'listing-page' : 'user' } : {}),
       ...(hint.roomLabel && !opts.roomLabel ? { suggestion: { roomLabel: hint.roomLabel, source: 'file name', confidence: 0.4 } } : {}),
     },
   };

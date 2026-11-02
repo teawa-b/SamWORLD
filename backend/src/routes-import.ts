@@ -102,6 +102,39 @@ export async function registerImportRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * What the "Send to WalkIn" button collected from a listing page open in the person's own browser
+   * (the same payload a future browser extension will post). Images are downloaded and checked here;
+   * anything that looks like a drawing becomes a floor plan.
+   */
+  app.post('/api/imports/collected', async (req) => {
+    rateLimit(req, 10);
+    const body = parse(
+      z.object({
+        title: z.string().max(300).optional(),
+        pageUrl: z.string().max(2000).optional(),
+        images: z.array(z.object({ url: z.string().max(2000), plan: z.boolean().optional() })).min(1).max(120),
+        rightsConfirmed: RightsConfirmed,
+      }),
+      req.body,
+    );
+    const host = (() => {
+      try {
+        return new URL(body.pageUrl ?? '').hostname.replace(/^www\./, '');
+      } catch {
+        return 'a listing page';
+      }
+    })();
+    const property = createUploadProperty({ title: body.title?.split(/\s[|\-–]\s/)[0], listingUrl: body.pageUrl ?? null }, `Collected from ${host} in the user’s browser`);
+    property.sourceProvider = 'browser';
+    await store.put('properties', property.id, property);
+    // Plans first so the cap never drops them; then photos.
+    const items = [...body.images.filter((i) => i.plan), ...body.images.filter((i) => !i.plan)].slice(0, 60).map((i) => ({ url: i.url, type: i.plan ? ('floorplan' as const) : undefined }));
+    const results = await addImageUrls(property, items, 'image-url');
+    const media = mediaFor(property.id);
+    return { property, media, results: { ok: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, floorplans: media.filter((m) => m.type === 'floorplan').length } };
+  });
+
   /** One raw image (JPG/PNG/WebP) per request. Query: type, filename, room. Header x-rights-confirmed: true. */
   app.post('/api/properties/:propertyId/media', { bodyLimit: MAX_IMAGE_BYTES }, async (req) => {
     rateLimit(req, 240);

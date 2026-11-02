@@ -5,6 +5,7 @@
 import { typeFromLabel, type Property, type PropertyMedia, type FloorplanInterpretation, type RoomHint } from '../shared/index.js';
 import { api, ApiError, mediaUrl, staticMode, type Capabilities, type Extraction } from '../api.js';
 import { icon } from './icons.js';
+import { bookmarkletHref, type Collected } from './bookmarklet.js';
 
 export const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -44,6 +45,8 @@ export class ImportFlow {
   lastExtraction: Extraction | null = null;
   busy: string | null = null;
   private rights = false;
+  /** Images handed over by the Send to WalkIn button, waiting for confirmation. */
+  collected: Collected | null = null;
   /** Real furniture from the photos (SAM 3D): off unless ticked; how many items at most. */
   sam3d = { on: true, max: 25 };
   private urlDraft = '';
@@ -55,6 +58,7 @@ export class ImportFlow {
   renderImport(demo: string): string {
     const off = staticMode ? 'disabled' : '';
     return `
+      ${this.collected ? this.renderCollected() : ''}
       <div class="eyebrow">New property</div>
       <h1>Turn a listing into a 3D home</h1>
       <p class="lede">Paste a listing link or add the photos and floor plan. The floor plan sets the walls and rooms; the photos supply what each room looks like and what is in it.</p>
@@ -75,6 +79,14 @@ export class ImportFlow {
         <span class="xs muted">Drop JPG, PNG or WebP files here, or click to choose. Files with “floor plan” in the name are marked as plans.</span>
       </div>
       <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden ${off} />
+      <details class="url-list" ${this.collected ? '' : ''}><summary>Get the floor plan from Zillow (or any listing site) with one click</summary>
+        <p class="xs muted">Sites like Zillow don’t let other servers read their pages, and their data feeds often leave the floor plan out. This button works from <b>your</b> browser instead: it reads the listing you are looking at, including its floor plan, and sends the images here.</p>
+        <ol class="xs muted steps-list">
+          <li>Drag this button to your bookmarks bar: <a class="btn small bookmarklet" href="${esc(bookmarkletHref())}" onclick="event.preventDefault();alert('Drag this button to your bookmarks bar, then click it on a listing page.')">${icon('cube', 14)}Send to WalkIn</a></li>
+          <li>Open the listing on Zillow. Open its photo gallery and the floor plan (so the page has loaded them).</li>
+          <li>Click <b>Send to WalkIn</b> in your bookmarks bar. WalkIn opens with the listing’s images; floor plans are found automatically.</li>
+        </ol>
+      </details>
       <details class="url-list"><summary>Add image links instead</summary>
         <textarea id="image-urls" class="field" rows="4" placeholder="One image URL per line" ${off}></textarea>
         <button class="btn block" data-action="import-image-urls" ${off}>Add images</button>
@@ -82,6 +94,24 @@ export class ImportFlow {
       <label class="switch rights"><input type="checkbox" id="rights" ${this.rights ? 'checked' : ''} ${off} />I own these images or have permission to use them to build a 3D model.</label>
       ${demo ? `<h3>Or open the demo home</h3>${demo}` : ''}
       <p class="xs faint" style="margin-top:14px"><a href="#" data-action="open-discover">Browse UK/US listings on a map</a> (needs the listings API key on the server).</p>`;
+  }
+
+  private renderCollected(): string {
+    const c = this.collected!;
+    const host = (() => {
+      try {
+        return new URL(c.pageUrl).hostname.replace(/^www\./, '');
+      } catch {
+        return 'the listing page';
+      }
+    })();
+    const plans = c.images.filter((i) => i.plan).length;
+    return `<div class="card collected">
+      <b>${c.images.length} images from ${esc(host)}</b>
+      <p class="xs muted">${esc(c.title)}<br/>${plans ? `${plans} marked as floor plan on the page.` : 'None marked as a floor plan on the page; WalkIn will check each image for plan drawings.'}</p>
+      <label class="switch rights"><input type="checkbox" id="rights" ${this.rights ? 'checked' : ''} />I have permission to use these images to build a 3D model.</label>
+      <button class="btn primary block" data-action="import-collected" ${this.busy ? 'disabled' : ''}>${this.busy === 'collected' ? 'Downloading…' : 'Import these images'}</button>
+    </div>`;
   }
 
   // ------------------------------------------------------------ Screen 2
@@ -374,6 +404,23 @@ export class ImportFlow {
     const mid = el.dataset.mid ?? '';
     const pid = this.property?.id ?? '';
     switch (action) {
+      case 'import-collected': {
+        if (!this.collected || !this.needRights()) return true;
+        this.busy = 'collected';
+        this.host.rerender();
+        try {
+          const r = await api.importCollected(this.collected);
+          this.collected = null;
+          this.busy = null;
+          this.host.toast(`${r.results.ok} images imported${r.results.failed ? `, ${r.results.failed} couldn’t be downloaded` : ''}; ${r.results.floorplans} floor plan(s).`);
+          await this.host.openReview(r.property.id);
+        } catch (e) {
+          this.busy = null;
+          this.host.toast((e as Error).message);
+          this.host.rerender();
+        }
+        return true;
+      }
       case 'pick-files':
         (document.getElementById('file-input') as HTMLInputElement | null)?.click();
         return true;

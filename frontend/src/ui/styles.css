@@ -458,3 +458,7 @@ label.det .cap { position: absolute; left: 0; bottom: 0; right: 0; font-size: 11
 .outline-svg { width: 130px; height: 110px; flex: none; }
 .outline-svg polygon { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 0.15; }
 .outline-svg text { fill: var(--text-3); text-anchor: middle; }
+
+.collected { padding: 14px; margin: 0 0 16px; border-color: var(--accent); display: grid; gap: 6px; }
+.steps-list { padding-left: 18px; display: grid; gap: 6px; }
+a.bookmarklet { cursor: grab; text-decoration: none; }

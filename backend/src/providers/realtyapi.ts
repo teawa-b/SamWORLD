@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import type { Property, PropertyMedia } from '../shared/index.js';
 import { config } from '../config.js';
 import { mimeFromName } from '../lib/image.js';
+import { drawingScore } from '../lib/drawing.js';
 import { ProviderUnavailableError } from './types.js';
 
 export type RealtyProvider = 'rightmove' | 'zoopla' | 'zillow' | 'realtor';
@@ -228,6 +229,8 @@ interface Details {
   photos: string[];
   floorPlans: string[];
   status: string;
+  /** Every gallery image (small thumbnail + full size), for finding plans hidden among the photos. */
+  gallery?: { thumb: string; full: string }[];
 }
 
 async function details(provider: RealtyProvider, listingId: string): Promise<Details> {
@@ -291,8 +294,21 @@ async function details(provider: RealtyProvider, listingId: string): Promise<Det
     // Some listings caption the plan among the photos; others keep it in a separate floor-plan field.
     const isPlanPhoto = (p: Json) => /floor.?plan|floorplan/i.test(`${p.caption ?? ''} ${p.subjectType ?? ''} ${p.title ?? ''}`);
     const all: Json[] = imgs.originalPhotos ?? [];
+    // Smallest jpeg at least ~300 px wide: enough to tell a drawing from a photo.
+    const thumb = (p: Json) => {
+      const jpeg: Json[] = [...(p.mixedSources?.jpeg ?? [])].sort((x, y) => (num(x.width) ?? 0) - (num(y.width) ?? 0));
+      return (jpeg.find((j) => (num(j.width) ?? 0) >= 300) ?? jpeg[jpeg.length - 1])?.url ?? best(p);
+    };
     const photos = all.filter((p) => !isPlanPhoto(p)).map(best).filter(Boolean);
-    const planFields = [...findFloorPlanUrls(d, 'byzpid'), ...findFloorPlanUrls(imgs, 'propimages')];
+    let planFields = [...findFloorPlanUrls(d, 'byzpid'), ...findFloorPlanUrls(imgs, 'propimages')];
+    if (!planFields.length && !all.some(isPlanPhoto)) {
+      // The basic record has no plan field; RealtyAPI's richer endpoint returns Zillow's fuller data.
+      const pro = await call<Json>('zillow', '/pro/byzpid', { zpid: listingId }, ttl).catch((e: Error) => ({ __error: e.message }) as Json);
+      planFields = findFloorPlanUrls(pro, 'pro');
+      const captioned = findCaptionedPlans(pro);
+      planFields.push(...captioned.map((url) => ({ url, path: 'pro.photos(caption)' })));
+      console.log(`[realty] zillow ${listingId} /pro/byzpid: ${pro.__error ? `failed (${pro.__error})` : `keys ${Object.keys(pro).slice(0, 40).join(',')}`}; floor-plan images there: ${planFields.length}`);
+    }
     const floorPlans = [...new Set([...all.filter(isPlanPhoto).map(best).filter(Boolean), ...planFields.map((h) => h.url)])];
     console.log(
       `[realty] zillow ${listingId}: ${photos.length} photos, ${floorPlans.length} floor plan(s)` +
@@ -312,6 +328,7 @@ async function details(provider: RealtyProvider, listingId: string): Promise<Det
       photos: photos.length ? photos : urls([imgs.hiResImageLink]),
       floorPlans,
       status: 'listing',
+      gallery: all.filter((p) => !isPlanPhoto(p)).map((p) => ({ thumb: thumb(p), full: best(p) })).filter((g) => g.thumb && g.full),
     };
   }
   const [propertyId, lid] = listingId.split(':');
@@ -348,6 +365,44 @@ export function findFloorPlanUrls(node: unknown, path = '', depth = 0, under = f
     if (u) return [{ url: u, path }];
   }
   return Object.entries(o).flatMap(([k, v]) => findFloorPlanUrls(v, path ? `${path}.${k}` : k, depth + 1, under || /floor.?plan/i.test(k)));
+}
+
+/** Photos captioned as floor plans anywhere in a payload (e.g. photos[].caption). */
+function findCaptionedPlans(node: unknown, depth = 0): string[] {
+  if (depth > 8 || node == null || typeof node !== 'object') return [];
+  if (Array.isArray(node)) return node.flatMap((n) => findCaptionedPlans(n, depth + 1));
+  const o = node as Json;
+  const text = `${o.caption ?? ''} ${o.title ?? ''} ${o.subjectType ?? ''} ${o.label ?? ''}`;
+  if (/floor.?plan/i.test(text)) {
+    const jpeg: Json[] = o.mixedSources?.jpeg ?? [];
+    const u = [...jpeg].sort((x, y) => (num(y.width) ?? 0) - (num(x.width) ?? 0))[0]?.url ?? firstUrl(o);
+    if (u) return [u];
+  }
+  return Object.values(o).flatMap((v) => findCaptionedPlans(v, depth + 1));
+}
+
+/** Gallery images that look like floor-plan drawings (pixel analysis of small thumbnails, 6 at a time). */
+async function findDrawings(gallery: { thumb: string; full: string }[]): Promise<{ thumb: string; full: string }[]> {
+  const hits: { g: { thumb: string; full: string }; i: number }[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < gallery.length && next < 120) {
+      const i = next++;
+      const g = gallery[i];
+      try {
+        const u = new URL(g.thumb);
+        if (u.protocol !== 'https:' || !MEDIA_HOSTS.some((re) => re.test(u.hostname))) continue;
+        const res = await fetch(u, { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) continue;
+        const s = drawingScore(Buffer.from(await res.arrayBuffer()));
+        if (s?.plan) hits.push({ g, i });
+      } catch {
+        /* skip this one */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  return hits.sort((a, b) => a.i - b.i).slice(0, 4).map((h) => h.g);
 }
 
 async function download(url: string, propertyId: string, name: string): Promise<{ key: string; mime: string } | null> {
@@ -395,9 +450,20 @@ export async function importRealty(provider: RealtyProvider, listingId: string, 
       metadata: { provider },
     });
   };
-  await Promise.all(d.floorPlans.slice(0, 4).map((u, i) => add(u, 'floorplan', i)));
+  let floorPlans = d.floorPlans;
+  let photos = d.photos;
+  if (!floorPlans.length && d.gallery?.length) {
+    // No labelled plan: look at every gallery image (thumbnails) for drawings. Plans are often near the end.
+    const found = await findDrawings(d.gallery);
+    console.log(`[realty] ${provider} ${listingId}: scanned ${d.gallery.length} gallery images for floor-plan drawings; found ${found.length}`);
+    if (found.length) {
+      floorPlans = found.map((g) => g.full);
+      photos = photos.filter((u) => !floorPlans.includes(u));
+    }
+  }
+  await Promise.all(floorPlans.slice(0, 4).map((u, i) => add(u, 'floorplan', i)));
   // Photos: cap to keep downloads and later AI calls bounded.
-  await Promise.all(d.photos.slice(0, 20).map((u, i) => add(u, 'photo', i)));
+  await Promise.all(photos.slice(0, 24).map((u, i) => add(u, 'photo', i)));
   media.sort((a, b) => (a.type === b.type ? a.id.localeCompare(b.id, undefined, { numeric: true }) : a.type === 'floorplan' ? -1 : 1));
 
   const missing: string[] = [];
