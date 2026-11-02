@@ -118,6 +118,9 @@ export class RoomScene {
   /** Points that belong to no found object (clutter, inner walls): fade out once a world is painted. */
   private loose: Points | null = null;
   private roomObjects: RoomObject[] = [];
+  private objectsShown = true;
+  private passthrough = false;
+  private savedBackground: { bg: unknown; fog: unknown } | null = null;
   shell: RoomShell | null = null;
 
   constructor(private world: World) {
@@ -264,7 +267,7 @@ export class RoomScene {
     }
     const anyPaint = [...this.surfaces.values()].some((s) => s.painted);
     if (this.outline) this.outline.visible = !anyPaint;
-    if (this.loose) {
+    if (this.loose && !this.passthrough) {
       const m = this.loose.material as PointsMaterial;
       m.transparent = true;
       m.opacity += ((anyPaint ? 0 : 1) - m.opacity) * Math.min(1, dt * 2);
@@ -276,6 +279,8 @@ export class RoomScene {
   setObjects(list: RoomObject[]) {
     const key = JSON.stringify(list.map((o) => [o.id, o.name, o.box]));
     if (key === this.objectKey) return;
+    // Different objects: models placed for the old ones may sit in the wrong slots.
+    if (this.objectKey) this.clearModels();
     this.objectKey = key;
     this.clearObjects();
     this.roomObjects = list;
@@ -403,6 +408,35 @@ export class RoomScene {
     this.loose.geometry.computeBoundingSphere();
   }
 
+  /**
+   * AR passthrough: the real room shows through, so hide everything that stands in for it (scan points, the
+   * base coat, outlines, labels, fog and the sky): only the painted walls and new furniture are drawn over it.
+   */
+  setPassthrough(on: boolean) {
+    for (const p of this.points.values()) p.visible = on ? false : true;
+    if (this.loose) this.loose.visible = !on;
+    for (const b of this.base) b.visible = !on;
+    if (this.outline) this.outline.visible = !on;
+    for (const o of this.objects.values()) o.root.visible = !on && this.objectsShown;
+    this.passthrough = on;
+    // Transparent where nothing is drawn, so the headset's camera view shows through.
+    this.world.renderer.setClearAlpha(on ? 0 : 1);
+    if (on) {
+      this.savedBackground ??= { bg: this.world.scene.background, fog: this.world.scene.fog };
+      this.world.scene.background = null;
+      this.world.scene.fog = null;
+    } else if (this.savedBackground) {
+      this.world.scene.background = this.savedBackground.bg as never;
+      this.world.scene.fog = this.savedBackground.fog as never;
+      this.savedBackground = null;
+    }
+  }
+
+  /** In a headset the outlined boxes and labels are clutter; they come back on leaving. */
+  setHeadset(on: boolean) {
+    for (const o of this.objects.values()) o.root.visible = !on && this.objectsShown;
+  }
+
   /** Emphasise one object (or none). */
   highlight(id: string | null) {
     for (const [k, o] of this.objects) {
@@ -413,6 +447,7 @@ export class RoomScene {
   }
 
   showObjects(visible: boolean) {
+    this.objectsShown = visible;
     for (const o of this.objects.values()) o.root.visible = visible;
   }
 

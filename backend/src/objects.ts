@@ -20,6 +20,7 @@ import {
   boxOfPoints,
   consolidateObjects,
   frontFace,
+  insideBox,
   invertRigid,
   projectToFrame,
   maskPoints,
@@ -308,8 +309,25 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
     // Number every copy once we know there are several ("chair 1", "chair 2").
     for (const o of objects) if ((counts.get(o.label) ?? 0) > 1 && o.name === o.label) o.name = `${o.label} 1`;
 
+    // An "inner wall" that runs mostly through furniture is really the furniture's flat front (a wardrobe and
+    // bench side by side in an alcove): drop it, or it gets painted over them.
+    if (scan.shell?.inner?.length) {
+      const furniture = objects.filter((o) => o.kind !== 'surface').map((o) => o.box);
+      const inner = scan.shell.inner.filter((w) => {
+        let covered = 0;
+        for (let k = 0; k <= 20; k++) {
+          const t = k / 20;
+          const p = [w.a[0] + (w.b[0] - w.a[0]) * t, 0, w.a[1] + (w.b[1] - w.a[1]) * t];
+          if (furniture.some((b) => insideBox(b, [p[0], b.centre[1], p[2]], 0.2))) covered++;
+        }
+        return covered / 21 < 0.4;
+      });
+      if (inner.length !== scan.shell.inner.length) scan.shell = { ...scan.shell, inner, diagnostics: [...scan.shell.diagnostics, `${scan.shell.inner.length - inner.length} inner wall(s) were furniture fronts; dropped`] };
+    }
+
     const summary = objects.length ? `Found ${objects.length} object${objects.length > 1 ? 's' : ''}: ${objects.map((o) => o.name).join(', ')}.` : 'SAM 3.1 outlined nothing that stands out from the walls and floor.';
     await save({
+      shell: scan.shell,
       objects,
       objectsStatus: { state: 'done', message: failures.length ? `${summary} (${failures.length} SAM call${failures.length > 1 ? 's' : ''} failed: ${failures[0]})` : summary, usage: budget.summary(), models: [listed.model] },
     });

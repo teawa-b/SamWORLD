@@ -3,14 +3,17 @@
  * Muse Spark plans it → Muse Image paints walls, floor and ceiling, spreading across the room as each lands.
  */
 import type { World } from '@iwsdk/core';
-import type { RoomShell } from '../shared/index.js';
+import { filmingStart, type RoomShell } from '../shared/index.js';
 import { RoomScene, paintOrigin, type RoomObject, type SurfaceId } from '../scene/roomshift-scene.js';
 import { app } from '../state.js';
-import { enterScanWalk, exitRoom, focusOrbit } from '../systems/walkthrough.js';
+import { enterScanWalk, exitRoom, focusOrbit, scanXR } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/** Which kind of headset session was asked for (set by the AR button, read when the session starts). */
+export const xrMode = { ar: false };
 
 const EXAMPLES = ['haunted Victorian library', 'underwater coral cave', '1970s Tokyo arcade', 'enchanted forest cabin', 'spaceship bridge', 'Egyptian tomb'];
 
@@ -22,7 +25,7 @@ interface Scan {
   message: string;
   cloud: { file: string; points: number } | null;
   bounds: { min: [number, number, number]; max: [number, number, number] } | null;
-  cameras: unknown[];
+  cameras: { pose: number[]; intrinsics: [number, number, number, number]; width: number; height: number }[];
   timings: Record<string, number>;
   model: string | null;
   shell?: RoomShell | null;
@@ -125,6 +128,14 @@ export class RoomshiftPanel {
     });
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && app.mode.value === 'walk') this.leaveWalk();
+    });
+    // Headset: line the room up with the real one (1:1) from where filming began; AR shows only the new world.
+    app.inXR.subscribe((xr) => {
+      scanXR.active = xr && !!this.scan?.shell && !this.scan.shell.fallback;
+      scanXR.pending = scanXR.active;
+      this.room.setHeadset(xr);
+      this.room.setPassthrough(xr && xrMode.ar);
+      if (!xr) xrMode.ar = false;
     });
   }
 
@@ -342,9 +353,10 @@ export class RoomshiftPanel {
     if (a === 'walk') {
       if (app.mode.value === 'walk') this.leaveWalk();
       else {
-        // Start near one end, looking down the room's length.
+        // Start where filming began (the video's first view); else near one end, looking down the room.
         const sh = this.scan?.shell;
-        enterScanWalk(this.world, this.room.wallSegments(), [0, sh ? Math.max(0, sh.size.depth / 2 - 0.6) : 0]);
+        const start = sh && !sh.fallback ? filmingStart(this.scan!.cameras, sh.alignment) : null;
+        enterScanWalk(this.world, this.room.wallSegments(), [0, sh ? Math.max(0, sh.size.depth / 2 - 0.6) : 0], start ?? undefined);
         this.render();
       }
     }
@@ -390,7 +402,8 @@ export class RoomshiftPanel {
       this.scan = (await call<{ scan: Scan }>(`/api/scans/${this.scan.id}`)).scan;
       const s = this.scan;
       if (s.state === 'ready') {
-        const key = `${s.id}:${s.cloud?.file}`;
+        // Rebuild when the cloud or the inner walls change (furniture fronts are dropped after objects are found).
+        const key = `${s.id}:${s.cloud?.file}:${JSON.stringify(s.shell?.inner ?? [])}`;
         if (this.shown !== key) {
           this.shown = key;
           await this.showRoom();
@@ -398,6 +411,8 @@ export class RoomshiftPanel {
         this.room.setObjects(s.objects ?? []);
         this.room.highlight(this.selected);
         this.room.showObjects(this.boxesOn);
+        // New or re-found objects: put the current world's pieces into them (placing is idempotent).
+        if (this.restyle) this.apply(this.restyle);
       }
       if (s.state !== 'reconstructing' && s.objectsStatus?.state !== 'running') {
         clearInterval(this.poll!);
@@ -412,10 +427,13 @@ export class RoomshiftPanel {
 
   private async showRoom() {
     const s = this.scan!;
+    scanXR.target = s.shell && !s.shell.fallback ? filmingStart(s.cameras, s.shell.alignment) : null;
     // Compact cloud first (about a quarter of the size); the PLY if this backend doesn't serve it.
     const compact = await fetch(`${BASE}/api/scans/${s.id}/cloud.rsc`).catch(() => null);
     const buf = await (compact?.ok ? compact : await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
     this.room.load(buf, s.shell);
+    // Objects before any world: a world's furniture is placed into these slots.
+    this.room.setObjects(s.objects ?? []);
     this.frameRoom();
     // Bring back the most recent finished world for this room.
     this.history = (await call<{ restyles: Restyle[] }>(`/api/scans/${s.id}/restyles`).catch(() => ({ restyles: [] }))).restyles;

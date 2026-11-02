@@ -3,11 +3,14 @@
  * - Dollhouse, desktop: orbit camera around the plinth.
  * - Walk, desktop: drag to look, WASD/arrows to move.
  * - Walk, XR: left stick moves (head-relative), right stick snap-turns.
+ * - Roomshift in a headset (1:1): the room is lined up with the real one from where filming began, and you
+ *   walk with your legs. The sticks only fine-tune that alignment (left: slide the room, right: turn it);
+ *   A or X lines it up again from where you stand.
  * Walking collides with plan walls; doorways are open gaps.
  */
 import { InputComponent, Pressed, Vector3, createSystem, type World } from '@iwsdk/core';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { blockingSegments, computeViewpoints, distPointSegment, pointInPolygon, type Vec2 } from '../shared/index.js';
+import { blockingSegments, computeViewpoints, distPointSegment, pointInPolygon, rigForAlignment, type FloorPose, type Vec2 } from '../shared/index.js';
 import { Hotspot } from '../components.js';
 import { app } from '../state.js';
 import { HOUSE_SCALE, mounted } from './dollhouse.js';
@@ -16,6 +19,15 @@ const EYE_HEIGHT = 1.6;
 const SPEED = 1.4;
 const RADIUS = 0.22;
 const SNAP_TURN = Math.PI / 6;
+/** Fine-tuning speeds for the 1:1 alignment: metres and radians per second at full stick. */
+const NUDGE_SPEED = 0.15;
+const NUDGE_TURN = (8 * Math.PI) / 180;
+
+/**
+ * Roomshift 1:1 headset state. `target` is where filming began (room frame); `pending` asks the system to
+ * line the room up on the next frame with a tracked head.
+ */
+export const scanXR: { active: boolean; target: FloorPose | null; pending: boolean } = { active: false, target: null, pending: false };
 
 let segments: [Vec2, Vec2][] = [];
 
@@ -62,13 +74,13 @@ function placeOnLevel(world: World, levelId: string, at: Vec2) {
   }
 }
 
-/** Phones in portrait see very little side to side; widen the view while walking. */
+/** Phones in portrait see very little side to side; widen the view while walking. A scan's own lens angle wins. */
 const DEFAULT_FOV = { value: 0 };
-function setWalkFov(world: World, walking: boolean) {
+function setWalkFov(world: World, walking: boolean, fov?: number) {
   const cam = world.camera;
   if (!DEFAULT_FOV.value) DEFAULT_FOV.value = cam.fov;
   const portrait = window.innerHeight > window.innerWidth;
-  cam.fov = walking && portrait ? 82 : DEFAULT_FOV.value;
+  cam.fov = walking && fov ? Math.min(90, Math.max(40, portrait ? fov : fov * 0.8)) : walking && portrait ? 82 : DEFAULT_FOV.value;
   cam.updateProjectionMatrix();
 }
 
@@ -114,21 +126,43 @@ export function changeLevel(world: World, dir: 1 | -1): boolean {
   return enterRoom(world, room.id);
 }
 
-/** Roomshift: walk inside a scanned room (room frame: floor y = 0), colliding with its fitted walls. */
-export function enterScanWalk(world: World, walls: [Vec2, Vec2][], at: Vec2 = [0, 0]) {
+/**
+ * Roomshift: walk inside a scanned room (room frame: floor y = 0), colliding with its fitted walls. With a
+ * `start` (where filming began) the walk opens on the video's first view: same spot, heading, height and
+ * lens angle.
+ */
+export function enterScanWalk(world: World, walls: [Vec2, Vec2][], at: Vec2 = [0, 0], start?: FloorPose & { eye: number; vfov: number }) {
   glide.active = false;
   app.mode.value = 'walk';
   app.walkLevelId.value = null;
   segments = walls;
-  world.player.position.set(at[0], 0, at[1]);
+  world.player.position.set(start ? start.x : at[0], 0, start ? start.z : at[1]);
   world.player.rotation.set(0, 0, 0);
   if (!app.inXR.value) {
-    look.yaw = 0;
-    look.pitch = -0.1;
-    world.camera.position.set(0, EYE_HEIGHT, 0);
+    look.yaw = start ? start.yaw : 0;
+    look.pitch = start ? 0 : -0.1;
+    world.camera.position.set(0, start ? start.eye : EYE_HEIGHT, 0);
     world.camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
-    setWalkFov(world, true);
+    setWalkFov(world, true, start?.vfov);
   }
+}
+
+/** Head pose on the floor plane in the rig's own space (where the headset tracks it). */
+function headInRig(world: World, q: Vector3): FloorPose {
+  const h = world.player.head;
+  q.set(0, 0, 1).applyQuaternion(h.quaternion); // the head Group's +z points backwards
+  return { x: h.position.x, z: h.position.z, yaw: Math.atan2(q.x, q.z) };
+}
+
+/** Line the virtual room up with the real one: the head, wherever it is now, goes onto `scanXR.target`. */
+export function alignToFilmingStart(world: World): boolean {
+  const t = scanXR.target;
+  const h = world.player.head;
+  if (!t || h.position.y < 0.3) return false; // head not tracked yet
+  const rig = rigForAlignment(headInRig(world, new Vector3()), t);
+  world.player.position.set(rig.x, 0, rig.z);
+  world.player.rotation.set(0, rig.yaw, 0);
+  return true;
 }
 
 export function exitRoom(world: World) {
@@ -175,8 +209,9 @@ export function resetOrbit(world: World) {
 export class WalkthroughSystem extends createSystem({
   pressedHotspots: { required: [Hotspot, Pressed] },
 }) {
-  private v = new Vector3();
-  private head = new Vector3();
+  declare updateScanXR: (delta: number) => void;
+  v = new Vector3();
+  head = new Vector3();
 
   init() {
     const el = this.renderer.domElement;
@@ -235,6 +270,11 @@ export class WalkthroughSystem extends createSystem({
   update(delta: number) {
     const walking = app.mode.value === 'walk';
     const xr = app.inXR.value;
+    if (xr && scanXR.active) {
+      if (orbit) orbit.enabled = false;
+      this.updateScanXR(delta);
+      return;
+    }
     if (orbit) orbit.enabled = !walking && !xr;
     if (!walking) {
       if (!xr) orbit?.update();
@@ -300,6 +340,36 @@ export class WalkthroughSystem extends createSystem({
     this.player.position.z += to[1] - from[1];
   }
 }
+
+/** Fine-tune the 1:1 alignment from the controllers (walking itself is physical). */
+WalkthroughSystem.prototype.updateScanXR = function (this: InstanceType<typeof WalkthroughSystem>, delta: number) {
+  if (scanXR.pending && alignToFilmingStart(this.world)) scanXR.pending = false;
+  const left = this.input.xr.gamepads.left;
+  const right = this.input.xr.gamepads.right;
+  if (right?.getButtonDown(InputComponent.A_Button) || left?.getButtonDown(InputComponent.X_Button)) alignToFilmingStart(this.world);
+  const slide = left?.getAxesValues(InputComponent.Thumbstick);
+  const turn = right?.getAxesValues(InputComponent.Thumbstick);
+  const dead = (v: number) => (Math.abs(v) < 0.2 ? 0 : v);
+  const sx = dead(slide?.x ?? 0), sy = dead(slide?.y ?? 0), tx = dead(turn?.x ?? 0);
+  if (!sx && !sy && !tx) return;
+  this.player.head.getWorldPosition(this.head);
+  const dir = this.player.head.getWorldDirection(this.v);
+  const yaw = Math.atan2(dir.x, dir.z);
+  // Moving the rig moves you through the room, so the room appears to move the other way: push the stick
+  // the way you want the room to go.
+  const step = NUDGE_SPEED * delta;
+  this.player.position.x -= (-Math.sin(yaw) * -sy + Math.cos(yaw) * sx) * step;
+  this.player.position.z -= (-Math.cos(yaw) * -sy - Math.sin(yaw) * sx) * step;
+  if (tx) {
+    const a = -tx * NUDGE_TURN * delta;
+    const p = this.player.position;
+    const dx = p.x - this.head.x, dz = p.z - this.head.z;
+    const c = Math.cos(a), s = Math.sin(a);
+    p.x = this.head.x + dx * c + dz * s;
+    p.z = this.head.z - dx * s + dz * c;
+    this.player.rotation.y += a;
+  }
+};
 
 /** Push a circle out of every wall segment it overlaps (two passes). */
 function resolveCollisions(p: Vec2): Vec2 {

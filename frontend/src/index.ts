@@ -6,12 +6,15 @@ import { MenuSystem } from './systems/menu.js';
 import { resetOrbit, WalkthroughSystem } from './systems/walkthrough.js';
 import { installObjectPicking } from './systems/objects.js';
 import { icon } from './ui/icons.js';
-import { RoomshiftPanel } from './ui/roomshift.js';
+import { RoomshiftPanel, xrMode } from './ui/roomshift.js';
 import { RoomshiftSystem } from './scene/roomshift-scene.js';
 import { Sheet } from './ui/sheet.js';
 import './ui/styles.css';
 
-const world = await World.create(document.getElementById('scene-container') as HTMLDivElement, projectOptions);
+// AR passthrough needs a canvas that can be transparent, which IWSDK only creates when AR is the default
+// session; our own VR / AR buttons pick the mode explicitly, so the browser's automatic offer is off.
+const options = { ...projectOptions, xr: { ...(projectOptions as { xr?: object }).xr, sessionMode: SessionMode.ImmersiveAR, offer: 'none' as const } };
+const world = await World.create(document.getElementById('scene-container') as HTMLDivElement, options as typeof projectOptions);
 if (import.meta.env.DEV) (window as unknown as { __walkin: unknown }).__walkin = { world, app };
 world.registerSystem(DollhouseSystem).registerSystem(WalkthroughSystem).registerSystem(MenuSystem).registerSystem(RoomshiftSystem);
 installObjectPicking(world);
@@ -41,16 +44,35 @@ effect(() => {
 
 document.querySelector('#topbar .logo')!.innerHTML = icon('roof', 14);
 
-// Roomshift re-enables the VR button (DETAIL.md): the scanned room is in metres with its centre at the
-// origin, so entering VR stands you in the middle of your room at 1:1. VITE_ENABLE_XR=false hides it.
+// Roomshift headset modes (DETAIL.md), both 1:1 with the real room: stand where you started filming, facing the
+// same way, and press VR (the new world all around you) or AR (Quest passthrough: the new world painted over
+// your real room). VITE_ENABLE_XR=false hides them.
 const xrButton = document.getElementById('enter-xr') as HTMLButtonElement;
 xrButton.innerHTML = `${icon('headset', 18)}VR`;
-if (import.meta.env.VITE_ENABLE_XR !== 'false')
+xrButton.title = 'Stand where you started filming, facing the same way, then enter VR';
+const arButton = xrButton.cloneNode() as HTMLButtonElement;
+arButton.id = 'enter-ar';
+arButton.innerHTML = `${icon('headset', 18)}AR`;
+arButton.title = 'Passthrough: your real room with the new world painted over it. Stand where you started filming first.';
+xrButton.after(arButton);
+if (import.meta.env.VITE_ENABLE_XR !== 'false') {
   navigator.xr
     ?.isSessionSupported(SessionMode.ImmersiveVR)
     .then((ok) => (xrButton.hidden = !ok))
     .catch(() => undefined);
-xrButton.addEventListener('click', () => world.launchXR());
+  navigator.xr
+    ?.isSessionSupported(SessionMode.ImmersiveAR)
+    .then((ok) => (arButton.hidden = !ok))
+    .catch(() => undefined);
+}
+xrButton.addEventListener('click', () => {
+  xrMode.ar = false;
+  world.launchXR({ sessionMode: SessionMode.ImmersiveVR });
+});
+arButton.addEventListener('click', () => {
+  xrMode.ar = true;
+  world.launchXR({ sessionMode: SessionMode.ImmersiveAR });
+});
 
 // On phones the sheet covers the bottom of the screen: shift the projection so
 // the model is centred in the part of the canvas that is still visible.
