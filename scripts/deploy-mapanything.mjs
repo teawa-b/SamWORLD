@@ -59,7 +59,8 @@ try {
   await run(['-m', 'modal', 'secret', 'create', 'roomshift-auth', `ROOMSHIFT_AUTH_TOKEN=${token}`, '--force'], { secret: token });
   console.log('\nDeploying. The first build installs PyTorch + MapAnything and downloads the weights: allow 10–20 minutes.');
   const out = await run(['-m', 'modal', 'deploy', 'worker-3d/mapanything_app.py']);
-  const base = /https:\/\/[\w.-]+\.modal\.run/.exec(out)?.[0];
+  // Modal's table output wraps long URLs across lines; join them back first.
+  const base = /https:\/\/[\w.-]+?\.modal\.run/.exec(out.replace(/\r?\n\s*/g, ''))?.[0];
   if (!base) throw new Error('Deployed, but no https://….modal.run URL was printed. Find it on modal.com (app "roomshift-mapanything") and set MAPANYTHING_URL=<url>/reconstruct in backend/.env.');
   env = setEnv(readFileSync(envPath, 'utf8'), 'MAPANYTHING_URL', `${base}/reconstruct`);
   writeFileSync(envPath, env);
