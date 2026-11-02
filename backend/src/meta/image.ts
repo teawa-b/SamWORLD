@@ -51,6 +51,19 @@ export async function restyleFlat(opts: { budget: AiBudget; imageDataUrl: string
   return { ...(await generate(opts.budget, [{ type: 'input_text', text }, { type: 'input_image', image_url: opts.imageDataUrl }])), prompt: text };
 }
 
+/**
+ * Fill the parts of a room surface the camera never saw (painted solid magenta) with more of the same
+ * surface. The caller keeps every texel that was seen, so only the magenta areas matter.
+ */
+export async function inpaintSurface(opts: { budget: AiBudget; imageDataUrl: string; surface: 'wall' | 'floor' | 'ceiling' }) {
+  const text =
+    `This is a photo of a room's ${opts.surface}, seen straight-on, with the parts the camera never saw painted solid magenta. ` +
+    `Replace every magenta area with more of the same ${opts.surface}, continuing naturally from the visible parts around it: ` +
+    `same material, colour, lighting, shading and texture. Plain ${opts.surface} only: no new objects, furniture, doors, windows, people or text, and no magenta left. ` +
+    'Keep the image the same size and composition and leave every non-magenta part as it is. Photorealistic.';
+  return { ...(await generate(opts.budget, [{ type: 'input_text', text }, { type: 'input_image', image_url: opts.imageDataUrl }])), prompt: text };
+}
+
 /** Kept for the old redesign route. */
 export async function redesignRoom(opts: { budget: AiBudget; photoDataUrl: string; instruction: string; roomLabel: string }) {
   const r = await restyleImage({ budget: opts.budget, imageDataUrl: opts.photoDataUrl, instruction: `${opts.instruction}. Keep walls, windows and doors where they are`, subject: opts.roomLabel });

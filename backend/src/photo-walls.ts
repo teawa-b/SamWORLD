@@ -5,15 +5,21 @@
  * so the bed isn't painted onto the wall behind it) contribute its colour, weighted towards head-on, close
  * views. Found furniture blocks the view too (its box is drawn into each frame's depth buffer), so a bed
  * whose points are sparse still isn't smeared onto the wall behind it. Texels no frame saw are filled
- * smoothly from their surroundings.
+ * smoothly from their surroundings, then, where a surface has real gaps, by Muse Image: it gets the photo
+ * with the gaps painted magenta and paints them in; only those gaps are taken from its answer (feathered
+ * into the smooth fill at their edges), so everything the video saw stays exactly as filmed.
  *
  * Runs after the objects are found (a few seconds); the images are cached next to the scan.
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
-import { config } from './config.js';
+import { config, metaConfigured } from './config.js';
+import { AiBudget } from './meta/client.js';
+import { inpaintSurface } from './meta/image.js';
 import { invertRigid, parsePly, planePoint, shellPlanes, transformPointRowMajor } from './shared/index.js';
 import type { Scan } from './store.js';
 
@@ -21,7 +27,17 @@ const TEXEL = 0.01; // metres
 const MAX_SIDE = 2048;
 const ZCELL = 2; // camera pixels per depth-buffer cell
 const OCCLUSION = 0.12; // metres in front of the surface that count as something blocking it
-export const PHOTO_WALLS_VERSION = 'photo-walls-v1';
+export const PHOTO_WALLS_VERSION = 'photo-walls-v2';
+/** Surfaces with at least this share unseen get Muse Image's fill. */
+const INPAINT_FROM = 0.08;
+
+/** Paint the unseen (magenta) parts of a surface photo; returns the painted image, or null. Swappable in tests. */
+export type Inpaint = (png: Buffer, surface: 'wall' | 'floor' | 'ceiling') => Promise<Buffer | null>;
+
+const museInpaint = (budget: AiBudget): Inpaint => async (png, surface) => {
+  const r = await inpaintSurface({ budget, imageDataUrl: `data:image/png;base64,${png.toString('base64')}`, surface });
+  return Buffer.from(r.imageBase64, 'base64');
+};
 
 export interface PhotoWall {
   id: string;
@@ -30,11 +46,14 @@ export interface PhotoWall {
   height: number;
   /** Share of texels some frame saw (the rest is filled in). */
   seen: number;
+  /** How the unseen part was filled. */
+  filled: 'muse-image' | 'smooth' | 'none';
 }
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
 
-export async function photoWalls(scan: Scan): Promise<PhotoWall[]> {
+export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } = {}): Promise<PhotoWall[]> {
+  const inpaint = opts.inpaint !== undefined ? opts.inpaint : metaConfigured() ? museInpaint(new AiBudget(12)) : null;
   const shell = scan.shell;
   if (!shell || shell.fallback || !scan.cloud || !scan.cameras.length) return [];
   const planes = shellPlanes(shell);
@@ -144,6 +163,7 @@ export async function photoWalls(scan: Scan): Promise<PhotoWall[]> {
 
   await mkdir(join(scanDir(scan.id), 'walls'), { recursive: true });
   const out: PhotoWall[] = [];
+  const jobs: (() => Promise<void>)[] = [];
   for (const G of grids) {
     const { tw, th, sum, wsum } = G;
     const col = new Float32Array(tw * th * 3);
@@ -173,17 +193,107 @@ export async function photoWalls(scan: Scan): Promise<PhotoWall[]> {
         keep[y * tw + x] = n >= 0.6 * all ? 1 : 0;
       }
     has.set(keep);
+    const seenMask = Uint8Array.from(has);
+    let kept = 0;
+    for (const v of seenMask) kept += v;
     fill(col, has, tw, th);
-    const data = Buffer.alloc(tw * th * 4);
-    for (let t = 0; t < tw * th; t++) {
-      for (let c = 0; c < 3; c++) data[t * 4 + c] = Math.max(0, Math.min(255, Math.round(col[t * 3 + c])));
-      data[t * 4 + 3] = 255;
-    }
-    const file = `${G.plane.id}.jpg`;
-    await writeFile(join(scanDir(scan.id), 'walls', file), jpeg.encode({ data, width: tw, height: th }, 85).data);
-    out.push({ id: G.plane.id, file, width: tw, height: th, seen: Math.round((100 * seen) / wsum.length) / 100 });
+    const unseen = 1 - kept / seenMask.length;
+    const plane = G.plane;
+    jobs.push(async () => {
+      let filled: PhotoWall['filled'] = unseen > 0 ? 'smooth' : 'none';
+      if (inpaint && unseen >= INPAINT_FROM) {
+        try {
+          const gen = await museFill(scan.id, plane.id, col, seenMask, tw, th, plane.surface === 'walls' ? 'wall' : plane.surface, inpaint);
+          if (gen) {
+            composite(col, gen, seenMask, tw, th);
+            filled = 'muse-image';
+          }
+        } catch {
+          // Keep the smooth fill.
+        }
+      }
+      const data = Buffer.alloc(tw * th * 4);
+      for (let t = 0; t < tw * th; t++) {
+        for (let c = 0; c < 3; c++) data[t * 4 + c] = Math.max(0, Math.min(255, Math.round(col[t * 3 + c])));
+        data[t * 4 + 3] = 255;
+      }
+      const file = `${plane.id}.jpg`;
+      await writeFile(join(scanDir(scan.id), 'walls', file), jpeg.encode({ data, width: tw, height: th }, 85).data);
+      out.push({ id: plane.id, file, width: tw, height: th, seen: Math.round((100 * seen) / wsum.length) / 100, filled });
+    });
   }
+  // Muse Image calls in parallel, four at a time.
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, jobs.length) }, async () => {
+      while (next < jobs.length) await jobs[next++]();
+    }),
+  );
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Ask for the unseen texels (magenta in the image sent) to be painted; the answer is resized to the surface
+ * and returned as RGB floats. Cached per input image, so rebuilding a room never pays twice.
+ */
+async function museFill(scanId: string, planeId: string, col: Float32Array, seen: Uint8Array, w: number, h: number, surface: 'wall' | 'floor' | 'ceiling', inpaint: Inpaint): Promise<Float32Array | null> {
+  const png = new PNG({ width: w, height: h });
+  for (let t = 0; t < w * h; t++) {
+    const rgb = seen[t] ? [col[t * 3], col[t * 3 + 1], col[t * 3 + 2]] : [255, 0, 255];
+    for (let c = 0; c < 3; c++) png.data[t * 4 + c] = Math.max(0, Math.min(255, Math.round(rgb[c])));
+    png.data[t * 4 + 3] = 255;
+  }
+  const marked = PNG.sync.write(png);
+  const key = createHash('sha256').update(config.meta.imageModel).update(marked).digest('hex').slice(0, 20);
+  const cacheFile = join(scanDir(scanId), 'walls', `fill-${planeId}-${key}.img`);
+  const answer = existsSync(cacheFile) ? await readFile(cacheFile) : await inpaint(marked, surface);
+  if (!answer) return null;
+  if (!existsSync(cacheFile)) await writeFile(cacheFile, answer);
+  const img = answer[0] === 0x89 ? PNG.sync.read(answer) : jpeg.decode(answer, { useTArray: true, formatAsRGBA: true });
+  // Resize to the surface (bilinear).
+  const out = new Float32Array(w * h * 3);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const fx = Math.min(img.width - 1.001, Math.max(0, ((x + 0.5) * img.width) / w - 0.5));
+      const fy = Math.min(img.height - 1.001, Math.max(0, ((y + 0.5) * img.height) / h - 0.5));
+      const x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0;
+      for (let c = 0; c < 3; c++) {
+        const at = (yy: number, xx: number) => img.data[(yy * img.width + xx) * 4 + c];
+        out[(y * w + x) * 3 + c] = at(y0, x0) * (1 - ax) * (1 - ay) + at(y0, x0 + 1) * ax * (1 - ay) + at(y0 + 1, x0) * (1 - ax) * ay + at(y0 + 1, x0 + 1) * ax * ay;
+      }
+    }
   return out;
+}
+
+/**
+ * Take the generated colour only where nothing was seen, easing in over FEATHER texels from the edge of
+ * what was seen (the smooth fill bridges the seam). Leftover magenta in the answer is ignored.
+ */
+export function composite(col: Float32Array, gen: Float32Array, seen: Uint8Array, w: number, h: number) {
+  const FEATHER = 6;
+  const dist = new Float32Array(w * h).fill(Infinity);
+  let frontier: number[] = [];
+  for (let t = 0; t < w * h; t++) if (seen[t]) (dist[t] = 0), frontier.push(t);
+  for (let d = 1; d <= FEATHER && frontier.length; d++) {
+    const next: number[] = [];
+    for (const t of frontier) {
+      const x = t % w, y = (t - x) / w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const q = yy * w + xx;
+        if (dist[q] > d) (dist[q] = d), next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  for (let t = 0; t < w * h; t++) {
+    if (seen[t]) continue;
+    const r = gen[t * 3], g = gen[t * 3 + 1], b = gen[t * 3 + 2];
+    if (r > 200 && b > 200 && g < 80) continue; // magenta left in: keep the smooth fill there
+    const a = Math.min(1, dist[t] / FEATHER);
+    for (let c = 0; c < 3; c++) col[t * 3 + c] = col[t * 3 + c] * (1 - a) + gen[t * 3 + c] * a;
+  }
 }
 
 /**

@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'walkin-photo-'));
 process.env.LOG_LEVEL = 'silent';
-const { photoWalls } = await import('../src/photo-walls.js');
+const { photoWalls, composite } = await import('../src/photo-walls.js');
 const { fitRoomShell, shellPlanes, transformPointRowMajor } = await import('../src/shared/index.js');
 
 describe('photo walls', () => {
@@ -41,7 +41,7 @@ describe('photo walls', () => {
       id, title: 't', createdAt: '', updatedAt: '', state: 'ready' as const, message: '', model: null, timings: {}, bounds: null,
       frames: [{ file: 'frame-000.jpg', bytes: 1, width: 512, height: 384 }], cloud: { file: 'cloud.ply', points: n }, cameras: [camera], shell,
     };
-    const walls = await photoWalls(scan);
+    const walls = await photoWalls(scan, { inpaint: null });
 
     // The wall the camera faces: the plane whose normal points back at the camera (room frame).
     const eye = transformPointRowMajor(shell.alignment, [2, 1.5, 1.5]);
@@ -58,5 +58,22 @@ describe('photo walls', () => {
     const left = px(0.35, 0.5), right = px(0.65, 0.5);
     expect(left[0]).toBeGreaterThan(left[2] + 100);
     expect(right[2]).toBeGreaterThan(right[0] + 100);
+  });
+});
+
+describe('filling the unseen part', () => {
+  it('takes generated colour only where nothing was seen, easing in from the edge, and ignores leftover magenta', () => {
+    // 20 × 1 strip: texels 0–9 seen (grey 100), 10–19 unseen; the smooth fill left them grey too.
+    const w = 20, h = 1;
+    const col = new Float32Array(w * 3).fill(100);
+    const seen = Uint8Array.from({ length: w }, (_, i) => (i < 10 ? 1 : 0));
+    const gen = new Float32Array(w * 3);
+    for (let i = 0; i < w; i++) gen.set(i === 19 ? [255, 0, 255] : [0, 200, 0], i * 3);
+    composite(col, gen, seen, w, h);
+    expect([...col.subarray(0, 30)].every((v) => v === 100)).toBe(true); // seen: untouched
+    expect(col[10 * 3 + 1]).toBeGreaterThan(100); // first unseen: partly green
+    expect(col[10 * 3 + 1]).toBeLessThan(200);
+    expect(col[17 * 3 + 1]).toBeCloseTo(200); // well inside: green
+    expect(col[19 * 3]).toBe(100); // magenta answer ignored
   });
 });
