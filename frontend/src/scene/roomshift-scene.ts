@@ -9,9 +9,13 @@
  *    with the holes filled, so the room reads as solid surfaces in their real colours, not floating dots.
  *  - When a surface's new texture arrives, the paint spreads across it from where you are (a growing sphere
  *    in the shader with a glowing edge), then that surface's scan points fade away.
- *  - Objects found by SAM 3.1 are shown as outlined boxes with their names.
+ *  - Objects found by SAM 3.1 are shown as outlined boxes with their names. When a world restyles one, its
+ *    SAM 3D model grows into that box (turned to face the way the real piece faced the camera) and the
+ *    piece's scan points inside the box disappear.
  */
 import {
+  AssetManager,
+  Box3,
   BoxGeometry,
   BufferGeometry,
   CanvasTexture,
@@ -26,6 +30,7 @@ import {
   Matrix4,
   Mesh,
   MeshBasicMaterial,
+  type Object3D,
   MeshStandardMaterial,
   PlaneGeometry,
   Points,
@@ -41,7 +46,7 @@ import {
   type Texture,
   type World,
 } from '@iwsdk/core';
-import { decodeCloud, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
+import { decodeCloud, insideBox, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
 
 export type SurfaceId = 'walls' | 'floor' | 'ceiling';
 type Bucket = SurfaceId | 'stuff';
@@ -68,6 +73,8 @@ export interface RoomObject {
   id: string;
   name: string;
   box: ObjectBox;
+  /** rotation.y that turns a model's front (+z) towards where the real piece was photographed from. */
+  facing?: number;
 }
 
 const TOL = 0.1;
@@ -101,6 +108,11 @@ export class RoomScene {
   private prevFog: unknown = undefined;
   private objects = new Map<string, { root: Group; lines: LineSegments; label: Sprite }>();
   private objectKey = '';
+  /** SAM 3D models placed in object boxes, by object id, with the model URL they show. */
+  private models = new Map<string, { root: Group; url: string; grow: number }>();
+  /** Scan points of the furniture, kept so pieces can be cut out when their model arrives. */
+  private stuff: { p: Float32Array; c: Float32Array } | null = null;
+  private roomObjects: RoomObject[] = [];
   shell: RoomShell | null = null;
 
   constructor(private world: World) {
@@ -134,6 +146,7 @@ export class RoomScene {
       buckets[b].p.push(q[0], q[1], q[2]);
       buckets[b].c.push(pc.colors[i * 3], pc.colors[i * 3 + 1], pc.colors[i * 3 + 2]);
     }
+    this.stuff = { p: Float32Array.from(buckets.stuff.p), c: Float32Array.from(buckets.stuff.c) };
     for (const [k, v] of Object.entries(buckets) as [Bucket, { p: number[]; c: number[] }][]) {
       if (!v.p.length) continue;
       const geo = new BufferGeometry();
@@ -226,6 +239,11 @@ export class RoomScene {
 
   /** Called every frame. */
   tick(dt: number) {
+    for (const m of this.models.values()) {
+      if (m.grow >= 1 || !m.root.parent) continue;
+      m.grow = Math.min(1, m.grow + dt * 1.4);
+      m.root.scale.setScalar(Math.max(0.001, 1 - Math.pow(1 - m.grow, 3)));
+    }
     for (const [id, s] of this.surfaces) {
       if (s.reveal.value < s.target) {
         s.reveal.value = Math.min(s.target, s.reveal.value + dt * Math.max(1.6, s.target / 2.2));
@@ -251,6 +269,7 @@ export class RoomScene {
     if (key === this.objectKey) return;
     this.objectKey = key;
     this.clearObjects();
+    this.roomObjects = list;
     for (const o of list) {
       const root = new Group();
       root.name = `Object_${o.id}`;
@@ -264,6 +283,73 @@ export class RoomScene {
       this.group.add(root);
       this.objects.set(o.id, { root, lines, label });
     }
+  }
+
+  /**
+   * Show a SAM 3D model in place of a scanned object: fitted inside its measured box (uniform scale), its
+   * front turned to the real piece's facing (snapped to the box's sides), standing on the box's floor.
+   */
+  async placeModel(id: string, url: string) {
+    const o = this.roomObjects.find((x) => x.id === id);
+    if (!o || this.models.get(id)?.url === url) return;
+    this.removeModel(id);
+    const slot = { root: new Group(), url, grow: 0 };
+    this.models.set(id, slot);
+    const gltf = await AssetManager.loadGLTF(url, `roomshift-${id}-${url}`);
+    if (this.models.get(id) !== slot) return; // replaced or cleared while loading
+    const model: Object3D = gltf.scene.clone(true);
+    // Turn the model inside the box frame: its front towards the camera, to the nearest side of the box.
+    const turn = Math.round(((o.facing ?? o.box.yaw) - o.box.yaw) / (Math.PI / 2)) * (Math.PI / 2);
+    const inner = new Group();
+    inner.rotation.y = turn;
+    inner.add(model);
+    const fit = new Group();
+    fit.add(inner);
+    const size = new Box3().setFromObject(fit).getSize(new Vector3());
+    const [w, h, d] = o.box.size;
+    const s = Math.min(w / (size.x || 1), h / (size.y || 1), d / (size.z || 1));
+    inner.scale.setScalar(s);
+    const b = new Box3().setFromObject(fit);
+    inner.position.set(-(b.min.x + b.max.x) / 2, -h / 2 - b.min.y, -(b.min.z + b.max.z) / 2);
+    slot.root.add(fit);
+    slot.root.position.set(...o.box.centre);
+    slot.root.rotation.y = o.box.yaw;
+    slot.root.scale.setScalar(0.001);
+    slot.root.name = `Model_${id}`;
+    this.group.add(slot.root);
+    this.cutStuff();
+  }
+
+  /** Back to the scanned piece. */
+  removeModel(id: string) {
+    const m = this.models.get(id);
+    if (!m) return;
+    m.root.removeFromParent();
+    this.models.delete(id);
+    this.cutStuff();
+  }
+
+  clearModels() {
+    for (const id of [...this.models.keys()]) this.removeModel(id);
+  }
+
+  /** Rebuild the furniture points without those inside boxes that now show a model. */
+  private cutStuff() {
+    const pts = this.points.get('stuff');
+    if (!pts || !this.stuff) return;
+    const boxes = this.roomObjects.filter((o) => this.models.get(o.id)?.root.parent).map((o) => o.box);
+    const { p, c } = this.stuff;
+    const keepP: number[] = [];
+    const keepC: number[] = [];
+    for (let i = 0; i < p.length; i += 3) {
+      const q = [p[i], p[i + 1], p[i + 2]];
+      if (boxes.some((b) => insideBox(b, q, 0.03))) continue;
+      keepP.push(q[0], q[1], q[2]);
+      keepC.push(c[i], c[i + 1], c[i + 2]);
+    }
+    pts.geometry.setAttribute('position', new Float32BufferAttribute(keepP, 3));
+    pts.geometry.setAttribute('color', new Float32BufferAttribute(keepC, 3));
+    pts.geometry.computeBoundingSphere();
   }
 
   /** Emphasise one object (or none). */
@@ -312,6 +398,8 @@ export class RoomScene {
   }
 
   clear() {
+    this.clearModels();
+    this.stuff = null;
     this.clearObjects();
     this.objectKey = '';
     this.entity?.dispose();

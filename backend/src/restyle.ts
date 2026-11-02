@@ -1,6 +1,7 @@
 /**
  * Roomshift steps 4–5 (DETAIL.md): a typed world → Muse Spark plan → Muse Image textures for walls, floor
- * and ceiling. Without MODEL_API_KEY the same flow runs on local placeholders (clearly flagged `offline`)
+ * and ceiling, and for each found object: Muse Image restyles its photo → SAM 3D rebuilds it as a 3D model,
+ * shown where the real one stands. Without MODEL_API_KEY the same flow runs on local placeholders (clearly flagged `offline`)
  * so the app is usable and testable end to end.
  */
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,12 +12,15 @@ import { PNG } from 'pngjs';
 import { config, metaConfigured } from './config.js';
 import { now } from './http.js';
 import { AiBudget, museJson } from './meta/client.js';
-import { surfaceTexture } from './meta/image.js';
-import { store, type Restyle, type RestylePlan, type Scan, type SurfaceId } from './store.js';
+import { restyleImage, surfaceTexture } from './meta/image.js';
+import { liftImage, sam3dReady } from './jobs/sam3d.js';
+import { store, type Restyle, type RestyleObject, type RestylePlan, type Scan, type SurfaceId } from './store.js';
 
 export const SURFACES: SurfaceId[] = ['walls', 'floor', 'ceiling'];
 export const textureDir = () => join(config.dataDir, 'textures');
-export const PLAN_PROMPT_VERSION = 'roomshift-plan-v1';
+export const PLAN_PROMPT_VERSION = 'roomshift-plan-v2';
+/** Objects restyled per world (largest first): each is one Muse Image call and one SAM 3D job. */
+const MAX_RESTYLED_OBJECTS = 8;
 
 const hexOk = (s: string) => /^#[0-9a-fA-F]{6}$/.test(s);
 const str = { type: 'string' };
@@ -31,6 +35,7 @@ const planSchema = obj({
   ceiling: surfaceSchema,
   light: obj({ colorHex: str, intensity: num }),
   fogHex: str,
+  objects: { type: 'array', items: obj({ id: str, instruction: str }) },
 });
 type PlanReply = Omit<RestylePlan, 'surfaces'> & Record<SurfaceId, RestylePlan['surfaces'][SurfaceId]>;
 
@@ -46,6 +51,7 @@ export async function startRestyle(scan: Scan, prompt: string): Promise<Restyle>
     message: metaConfigured() ? 'Muse Spark is planning your world…' : 'Planning (offline placeholder: MODEL_API_KEY is not set)…',
     plan: null,
     surfaces: SURFACES.map((id) => ({ id, state: 'pending', texture: null, model: null, error: null, seconds: null })),
+    objects: metaConfigured() && sam3dReady().ok ? restylable(scan).map((o) => ({ id: o.id, name: o.name, instruction: '', state: 'pending', image: null, model: null, format: null, error: null, seconds: null })) : [],
     offline: !metaConfigured(),
     models: [],
     usage: '',
@@ -55,9 +61,14 @@ export async function startRestyle(scan: Scan, prompt: string): Promise<Restyle>
   return r;
 }
 
+/** The objects worth rebuilding: largest first, with a crop to restyle. */
+function restylable(scan: Scan) {
+  return (scan.objects ?? []).filter((o) => o.crop).slice(0, MAX_RESTYLED_OBJECTS);
+}
+
 async function runRestyle(scan: Scan, r: Restyle) {
   const save = (patch: Partial<Restyle> = {}) => store.put('restyles', r.id, Object.assign(r, patch, { updatedAt: now() }));
-  const budget = new AiBudget(12);
+  const budget = new AiBudget(12 + 2 * MAX_RESTYLED_OBJECTS);
   try {
     // ---- plan
     let plan: RestylePlan;
@@ -71,8 +82,10 @@ async function runRestyle(scan: Scan, r: Restyle) {
           'For walls, floor and ceiling: `prompt` describes ONE seamless, tileable material texture seen flat and straight-on (material, colour, pattern, wear, small details; no objects, no perspective, no people, no text), ' +
           '`colorHex` is its average colour (#rrggbb) and `tileMetres` how many metres one tile of the texture covers (0.5–4). ' +
           '`light` is the room’s ambient light colour and intensity (0.3 dim … 1.5 bright); `fogHex` is the atmosphere colour. ' +
-          '`title` is a 2–5 word name for the world, `brief` one vivid sentence. Return JSON only.',
-        text: `World: "${r.prompt}".\n${roomDescription(scan)}\nPhotos of the real room follow.`,
+          '`title` is a 2–5 word name for the world, `brief` one vivid sentence. ' +
+          'For every listed object, `objects` gives its `id` and an `instruction` saying what that piece becomes in this world while keeping its role, size and shape ' +
+          '(e.g. "a carved dark-oak four-poster bed with velvet drapes"): one concrete sentence about materials, colours and details, no scenery. Return JSON only.',
+        text: `World: "${r.prompt}".\n${roomDescription(scan)}\n${objectList(scan)}\nPhotos of the real room follow.`,
         images: await keyframes(scan, 2),
         schemaName: 'roomshift_plan',
         schema: planSchema,
@@ -82,7 +95,9 @@ async function runRestyle(scan: Scan, r: Restyle) {
     }
     await save({ plan, state: 'painting', message: `Painting “${plan.title}”…` });
 
-    // ---- paint: the three surfaces in parallel (Muse Image allows a few at a time)
+    for (const o of r.objects ?? []) o.instruction = plan.objects?.find((p) => p.id === o.id)?.instruction || `${o.name} reimagined for ${r.prompt}`;
+    // ---- paint: the three surfaces in parallel (Muse Image allows a few at a time), objects alongside
+    const objectsDone = paintObjects(scan, r, budget, () => save());
     await Promise.all(
       r.surfaces.map(async (s) => {
         const t = Date.now();
@@ -118,15 +133,72 @@ async function runRestyle(scan: Scan, r: Restyle) {
         await save();
       }),
     );
+    if ((r.objects ?? []).length) await save({ message: 'Walls, floor and ceiling painted; rebuilding the furniture in 3D…' });
+    await objectsDone;
     const failed = r.surfaces.filter((s) => s.state === 'failed');
+    const objs = r.objects ?? [];
+    const objNote = objs.length ? ` ${objs.filter((o) => o.state === 'done').length}/${objs.length} pieces of furniture rebuilt.` : '';
     await save({
       state: failed.length === r.surfaces.length ? 'failed' : 'done',
-      message: failed.length ? `${r.surfaces.length - failed.length}/${r.surfaces.length} surfaces painted. ${failed.map((f) => `${f.id}: ${f.error}`).join('; ')}` : `“${plan.title}” is ready.`,
+      message: (failed.length ? `${r.surfaces.length - failed.length}/${r.surfaces.length} surfaces painted. ${failed.map((f) => `${f.id}: ${f.error}`).join('; ')}` : `“${plan.title}” is ready.`) + objNote,
       usage: budget.summary(),
     });
   } catch (e) {
     await save({ state: 'failed', message: (e as Error).message, usage: budget.summary() });
   }
+}
+
+function objectList(scan: Scan): string {
+  const list = restylable(scan);
+  if (!list.length) return 'No objects to restyle: return an empty `objects` list.';
+  return `Objects found in the room (id: name, width × height × depth in metres):\n${list.map((o) => `${o.id}: ${o.name}, ${o.box.size.map((v) => v.toFixed(1)).join(' × ')}`).join('\n')}`;
+}
+
+/**
+ * Each object: Muse Image restyles the crop of its clearest view (same pose and framing), then SAM 3D
+ * rebuilds the restyled piece as a 3D model. Three objects in flight at a time.
+ */
+async function paintObjects(scan: Scan, r: Restyle, budget: AiBudget, save: () => Promise<void>) {
+  const queue = [...(r.objects ?? [])];
+  const work = async (o: RestyleObject) => {
+    const t = Date.now();
+    const so = scan.objects?.find((x) => x.id === o.id);
+    try {
+      if (!so?.crop) throw new Error('no photo of this object');
+      const crop = await readFile(join(config.dataDir, 'scans', scan.id, so.crop));
+      o.state = 'restyling';
+      await save();
+      const key = createHash('sha256').update(JSON.stringify([config.meta.imageModel, 'object-v1', o.instruction])).update(crop).digest('hex').slice(0, 24);
+      await mkdir(textureDir(), { recursive: true });
+      let image = ['png', 'jpg', 'webp'].map((e) => `${key}.${e}`).find((f) => existsSync(join(textureDir(), f)));
+      if (!image) {
+        const img = await restyleImage({ budget, imageDataUrl: `data:image/jpeg;base64,${crop.toString('base64')}`, instruction: o.instruction, subject: o.name });
+        const buf = Buffer.from(img.imageBase64, 'base64');
+        image = `${key}.${sniff(buf)}`;
+        await writeFile(join(textureDir(), image), buf);
+      }
+      o.image = image;
+      o.state = 'lifting';
+      await save();
+      const buf = await readFile(join(textureDir(), image));
+      const lifted = await liftImage({ id: `${r.id}-${o.id}`, label: so.label, image: buf, mime: image.endsWith('.png') ? 'image/png' : image.endsWith('.webp') ? 'image/webp' : 'image/jpeg' });
+      if (!lifted.ok) throw new Error(`SAM 3D: ${lifted.error}`);
+      o.model = lifted.url;
+      o.format = lifted.format;
+      o.state = 'done';
+      if (!r.models.includes(lifted.model)) r.models.push(lifted.model);
+    } catch (e) {
+      o.state = 'failed';
+      o.error = (e as Error).message.slice(0, 300);
+    }
+    o.seconds = Math.round((Date.now() - t) / 100) / 10;
+    await save();
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(3, queue.length) }, async () => {
+      for (let o = queue.shift(); o; o = queue.shift()) await work(o);
+    }),
+  );
 }
 
 function roomDescription(scan: Scan): string {
@@ -161,6 +233,7 @@ function normalisePlan(d: PlanReply): RestylePlan {
     surfaces: { walls: surf(d.walls, 'painted plaster', 2), floor: surf(d.floor, 'wooden floorboards', 1.5), ceiling: surf(d.ceiling, 'white plaster', 2) },
     light: { colorHex: hexOk(d.light?.colorHex) ? d.light.colorHex : '#ffffff', intensity: clamp(d.light?.intensity, 0.3, 1.5, 1) },
     fogHex: hexOk(d.fogHex) ? d.fogHex : '#000000',
+    objects: (Array.isArray(d.objects) ? d.objects : []).map((o) => ({ id: String(o?.id ?? ''), instruction: String(o?.instruction ?? '').slice(0, 300) })).filter((o) => o.id),
   };
 }
 

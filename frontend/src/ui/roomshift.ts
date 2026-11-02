@@ -44,6 +44,7 @@ interface Restyle {
     fogHex: string;
   } | null;
   surfaces: { id: SurfaceId; state: 'pending' | 'running' | 'done' | 'failed'; texture: string | null; model: string | null; error: string | null; seconds: number | null }[];
+  objects?: { id: string; name: string; instruction: string; state: 'pending' | 'restyling' | 'lifting' | 'done' | 'failed'; image: string | null; model: string | null; format: string | null; error: string | null; seconds: number | null }[];
   models: string[];
   usage: string;
   createdAt: string;
@@ -196,6 +197,7 @@ export class RoomshiftPanel {
           <ul class="steps" style="margin:8px 0 0">
             ${stepLi(r.plan ? 'done' : r.state === 'failed' ? 'failed' : 'active', `Plan${r.offline ? '' : ' · Muse Spark'}`)}
             ${r.surfaces.map((x) => stepLi(x.state === 'done' ? 'done' : x.state === 'failed' ? 'failed' : x.state === 'running' ? 'active' : '', `${cap(x.id)}${x.seconds != null && x.state === 'done' ? ` · ${x.seconds} s` : ''}`, x.error)).join('')}
+            ${(r.objects ?? []).map((x) => stepLi(x.state === 'done' ? 'done' : x.state === 'failed' ? 'failed' : x.state === 'pending' ? '' : 'active', `${cap(x.name)}${x.state === 'restyling' ? ' · Muse Image' : x.state === 'lifting' ? ' · SAM 3D' : x.state === 'done' && x.seconds != null ? ` · ${x.seconds} s` : ''}`, x.error)).join('')}
           </ul>
           ${r.state === 'failed' || r.surfaces.some((x) => x.state === 'failed') ? `<p class="xs error-text" style="margin:6px 0 0">${esc(r.message)}</p>` : ''}
           ${r.offline ? `<p class="xs faint" style="margin:6px 0 0">MODEL_API_KEY isn’t set on the backend, so these are local stand-ins, not Muse output.</p>` : ''}
@@ -349,12 +351,14 @@ export class RoomshiftPanel {
       this.rpoll = null;
       this.restyle = null;
       this.room.reset();
+      this.room.clearModels();
       this.render();
     }
     if (a === 'replay') {
       const h = this.history.find((x) => x.id === t.dataset.id);
       if (h) {
         this.room.reset();
+        this.room.clearModels();
         this.origin = paintOrigin(this.world, this.scan?.shell ?? null);
         this.restyle = h;
         this.apply(h);
@@ -429,6 +433,7 @@ export class RoomshiftPanel {
     try {
       const { restyle } = await postJson<{ restyle: Restyle }>(`/api/scans/${this.scan.id}/restyles`, { prompt });
       this.room.reset();
+      this.room.clearModels();
       this.origin = paintOrigin(this.world, this.scan.shell ?? null);
       this.restyle = restyle;
       this.followRestyle(restyle.id);
@@ -461,6 +466,7 @@ export class RoomshiftPanel {
     if (!r.plan) return;
     this.room.mood(r.plan.light, r.plan.fogHex);
     const from = this.origin ?? paintOrigin(this.world, this.scan?.shell ?? null);
+    for (const o of r.objects ?? []) if (o.state === 'done' && o.model && o.format === 'glb') void this.room.placeModel(o.id, `${BASE}${o.model}`).catch((e) => console.warn(`Model for ${o.name} failed to load`, e));
     for (const s of r.surfaces) {
       if (s.state !== 'done' || !s.texture) continue;
       const spec = r.plan.surfaces[s.id];

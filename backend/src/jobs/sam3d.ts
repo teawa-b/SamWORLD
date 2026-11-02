@@ -272,3 +272,39 @@ export async function requestSam3d(opts: {
   await opts.log(`SAM 3D: ${ok} of ${heroes.length} item(s) rebuilt from photos${ok < heroes.length ? '; the rest keep stand-in shapes' : ''}`, ok < heroes.length ? 'warn' : 'info');
   return { objects: out, state: ok ? 'used' : 'failed' };
 }
+
+/**
+ * Roomshift: lift one image (a restyled object crop) to a 3D model. Same providers, cache and file store as
+ * reconstructObject, keyed by the image and label, so the same restyle never pays twice.
+ */
+export async function liftImage(opts: { id: string; label: string; image: Buffer; mime: string }): Promise<{ ok: true; url: string; format: 'glb' | 'ply-splat' | 'ply-mesh'; model: string; seconds: number | null } | { ok: false; error: string }> {
+  const ready = sam3dReady();
+  if (!ready.ok) return { ok: false, error: ready.reason };
+  const hash = createHash('sha256').update(`lift-v1:${ready.provider}`).update(opts.image).update(opts.label).digest('hex');
+  const cache: Record<string, WorkerReply> = existsSync(cacheFile()) ? JSON.parse(await readFile(cacheFile(), 'utf8')) : {};
+  let reply = cache[hash];
+  if (!reply) {
+    // The restyled crop is centred on the object: prompt with a box over most of the image.
+    const input = { objectId: opts.id, category: opts.label, mediaId: opts.id, imageDataUrl: `data:${opts.mime};base64,${opts.image.toString('base64')}`, box: [0.04, 0.04, 0.96, 0.96] as Detection['box'], maskSvg: null };
+    try {
+      reply = ready.provider === 'fal' ? await callFal(input) : await callModal(input);
+    } catch (e) {
+      reply = { status: 'error', objectId: opts.id, diagnostics: [(e as Error).message] };
+    }
+    if (reply.status === 'ok' && reply.assetBase64) {
+      const file = `${hash.slice(0, 24)}.${reply.format === 'glb' ? 'glb' : 'ply'}`;
+      await mkdir(join(config.dataDir, 'sam3d'), { recursive: true });
+      await writeFile(join(config.dataDir, 'sam3d', file), Buffer.from(reply.assetBase64, 'base64'));
+      reply = { ...reply, assetBase64: undefined, assetUrl: `/api/sam3d/${file}` };
+    }
+    const transient = reply.status === 'error' && (reply.diagnostics ?? []).some((d) => /fetch failed|ECONN|timeout|aborted|HTTP 5\d\d/i.test(d));
+    if (!transient) {
+      // Re-read: other lifts may have written meanwhile.
+      const fresh: Record<string, WorkerReply> = existsSync(cacheFile()) ? JSON.parse(await readFile(cacheFile(), 'utf8')) : {};
+      fresh[hash] = reply;
+      await writeFile(cacheFile(), JSON.stringify(fresh, null, 1));
+    }
+  }
+  if (reply.status !== 'ok' || !reply.assetUrl) return { ok: false, error: (reply.diagnostics ?? []).join('; ') || 'SAM 3D returned no model' };
+  return { ok: true, url: reply.assetUrl, format: reply.format ?? 'glb', model: reply.modelVersion ?? 'sam-3d', seconds: reply.durationSeconds ?? null };
+}

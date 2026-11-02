@@ -256,7 +256,8 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       } catch {
         crop = null;
       }
-      objects.push({ id, label: o.label, name: nth > 1 ? `${o.label} ${nth}` : o.label, box, points: o.points.length, views: o.detections.length, bestFrame: view.frame, crop });
+      const facing = Math.atan2(eye[0] - box.centre[0], eye[2] - box.centre[2]);
+      objects.push({ id, label: o.label, name: nth > 1 ? `${o.label} ${nth}` : o.label, box, points: o.points.length, views: o.detections.length, bestFrame: view.frame, facing, crop });
     }
     // Number every copy once we know there are several ("chair 1", "chair 2").
     for (const o of objects) if ((counts.get(o.label) ?? 0) > 1 && o.name === o.label) o.name = `${o.label} 1`;

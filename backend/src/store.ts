@@ -44,8 +44,25 @@ export interface RestylePlan {
   title: string;
   brief: string;
   surfaces: Record<SurfaceId, { prompt: string; colorHex: string; tileMetres: number }>;
+  /** Per scanned object: how it changes in this world (keeps its role and size). */
+  objects?: { id: string; instruction: string }[];
   light: { colorHex: string; intensity: number };
   fogHex: string;
+}
+
+export interface RestyleObject {
+  /** ScanObject id. */
+  id: string;
+  name: string;
+  instruction: string;
+  state: 'pending' | 'restyling' | 'lifting' | 'done' | 'failed';
+  /** Muse Image's restyled crop, under /api/textures/. */
+  image: string | null;
+  /** SAM 3D model (GLB, or PLY splat) under /api/sam3d/. */
+  model: string | null;
+  format: 'glb' | 'ply-splat' | 'ply-mesh' | null;
+  error: string | null;
+  seconds: number | null;
 }
 
 export interface RestyleSurface {
@@ -68,6 +85,8 @@ export interface Restyle {
   message: string;
   plan: RestylePlan | null;
   surfaces: RestyleSurface[];
+  /** Furniture restyled by Muse Image and rebuilt in 3D by SAM 3D (absent on older restyles). */
+  objects?: RestyleObject[];
   /** True when MODEL_API_KEY is unset: the plan and textures are local placeholders, not Meta output. */
   offline: boolean;
   models: string[];
@@ -116,6 +135,8 @@ export interface ScanObject {
   points: number;
   views: number;
   bestFrame: number;
+  /** three.js rotation.y that turns a model's front (+z) towards the camera of the clearest view. */
+  facing?: number;
   /** Crop of the clearest view, served at /api/scans/:id/objects/:objectId/crop.jpg. */
   crop: string | null;
 }
