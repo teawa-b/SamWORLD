@@ -31,7 +31,8 @@ import modal
 
 GPU = os.environ.get("MAPANYTHING_GPU", "A10G")
 CHECKPOINT = os.environ.get("MAPANYTHING_CHECKPOINT", "facebook/map-anything-apache")  # Apache 2.0, not gated
-MAX_POINTS = 400_000
+MAX_POINTS = 1_000_000
+VOXEL = 0.01  # metres: one point per 1 cm cell keeps surfaces dense without stacking duplicates
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -144,8 +145,12 @@ class MapAnythingWorker:
 
         pts = np.concatenate(pts_all) if pts_all else np.zeros((0, 3), np.float32)
         cols = np.concatenate(col_all) if col_all else np.zeros((0, 3), np.uint8)
+        if len(pts):
+            # Overlapping frames see the same surfaces many times: keep one point per voxel.
+            cell = np.floor(pts / VOXEL).astype(np.int64)
+            _, first = np.unique(cell, axis=0, return_index=True)
+            pts, cols = pts[first], cols[first]
         if len(pts) > MAX_POINTS:
-            # Voxel-ish thinning: keep a random subset (uniform over surfaces seen in many frames).
             keep = np.random.default_rng(0).choice(len(pts), MAX_POINTS, replace=False)
             pts, cols = pts[keep], cols[keep]
 

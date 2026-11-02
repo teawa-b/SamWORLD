@@ -5,6 +5,8 @@
  *  - The point cloud is split into floor / ceiling / walls / "stuff" (furniture) buckets.
  *  - The fitted shell (floor, ceiling, four walls) is built as planes facing into the room, so from outside
  *    the near walls cull away (dollhouse view) and from inside you see every surface.
+ *  - Before any paint, each shell plane wears a "base coat": its own scan points rasterised into a texture
+ *    with the holes filled, so the room reads as solid surfaces in their real colours, not floating dots.
  *  - When a surface's new texture arrives, the paint spreads across it from where you are (a growing sphere
  *    in the shader with a glowing edge), then that surface's scan points fade away.
  *  - Objects found by SAM 3.1 are shown as outlined boxes with their names.
@@ -21,7 +23,9 @@ import {
   HemisphereLight,
   LineBasicMaterial,
   LineSegments,
+  Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   PlaneGeometry,
   Points,
@@ -67,6 +71,9 @@ export interface RoomObject {
 }
 
 const TOL = 0.1;
+/** Base-coat texel size (metres) and how far behind the paint planes it sits. */
+const BASE_TEXEL = 0.02;
+const BASE_OFFSET = 0.012;
 const OBJ_COLOR = 0x7fd4ff;
 const OBJ_HIGHLIGHT = 0xffc857;
 
@@ -85,6 +92,9 @@ export class RoomScene {
   private points = new Map<Bucket, Points>();
   private surfaces = new Map<SurfaceId, Surface>();
   private outline: LineSegments | null = null;
+  private base: Mesh[] = [];
+  /** Surfaces whose base coat stands in for their scan points (the points fade; furniture points stay). */
+  private coated = new Set<SurfaceId>();
   private hemi = new HemisphereLight(0xffffff, 0x444444, 0);
   private loader = new TextureLoader();
   private textures = new Map<string, Promise<Texture>>();
@@ -105,7 +115,7 @@ export class RoomScene {
     this.group.add(this.hemi);
     this.shell = shell ?? null;
     const usable = !!shell && !shell.fallback && shell.walls.length === 4;
-    const pc = parsePly(ply, { maxPoints: 600_000 });
+    const pc = parsePly(ply, { maxPoints: 1_200_000 });
     const A = shell?.alignment ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     const W = shell?.size.width ?? 0;
     const D = shell?.size.depth ?? 0;
@@ -129,12 +139,15 @@ export class RoomScene {
       const geo = new BufferGeometry();
       geo.setAttribute('position', new Float32BufferAttribute(v.p, 3));
       geo.setAttribute('color', new Float32BufferAttribute(v.c, 3));
-      const pts = new Points(geo, new PointsMaterial({ size: 0.014, vertexColors: true, transparent: true, opacity: 1, depthWrite: true }));
+      const pts = new Points(geo, new PointsMaterial({ size: 0.02, vertexColors: true, transparent: true, opacity: 1, depthWrite: true }));
       pts.name = `ScanPoints_${k}`;
       this.points.set(k, pts);
       this.group.add(pts);
     }
-    if (usable) this.buildShell(W, D, H);
+    if (usable) {
+      this.buildShell(W, D, H);
+      this.buildBaseCoat(buckets);
+    }
     this.entity = this.world.createTransformEntity(this.group);
   }
 
@@ -202,9 +215,10 @@ export class RoomScene {
       s.reveal.value = 0;
       s.target = 0;
     }
-    for (const p of this.points.values()) {
-      (p.material as PointsMaterial).opacity = 1;
-      p.visible = true;
+    for (const [k, p] of this.points) {
+      const on = !this.coated.has(k as SurfaceId);
+      (p.material as PointsMaterial).opacity = on ? 1 : 0;
+      p.visible = on;
     }
     if (this.outline) this.outline.visible = true;
     this.mood(null, null);
@@ -220,7 +234,7 @@ export class RoomScene {
       const pts = this.points.get(id);
       if (pts) {
         const m = pts.material as PointsMaterial;
-        const goal = s.painted && s.reveal.value >= s.target * 0.6 ? 0 : 1;
+        const goal = this.coated.has(id) || (s.painted && s.reveal.value >= s.target * 0.6) ? 0 : 1;
         m.opacity += (goal - m.opacity) * Math.min(1, dt * 3);
         pts.visible = m.opacity > 0.02;
       }
@@ -316,6 +330,13 @@ export class RoomScene {
         m.removeFromParent();
       }
     this.surfaces.clear();
+    for (const m of this.base) {
+      (m.material as MeshBasicMaterial).map?.dispose();
+      (m.material as MeshBasicMaterial).dispose();
+      m.removeFromParent();
+    }
+    this.base = [];
+    this.coated.clear();
     this.outline?.geometry.dispose();
     this.outline?.removeFromParent();
     this.outline = null;
@@ -325,6 +346,45 @@ export class RoomScene {
   }
 
   // ------------------------------------------------------------------------------------------------
+
+  /** Rasterise each surface's scan points onto its plane, fill the gaps, and show that behind the paint. */
+  private buildBaseCoat(buckets: Record<Bucket, { p: number[]; c: number[] }>) {
+    const v = new Vector3();
+    for (const [id, s] of this.surfaces) {
+      const src = buckets[id];
+      for (const m of s.meshes) {
+        const { width: w, height: h } = (m.geometry as PlaneGeometry).parameters;
+        const tw = Math.min(512, Math.max(8, Math.round(w / BASE_TEXEL)));
+        const th = Math.min(512, Math.max(8, Math.round(h / BASE_TEXEL)));
+        m.updateMatrix();
+        const inv = new Matrix4().copy(m.matrix).invert();
+        const sum = new Float32Array(tw * th * 3);
+        const cnt = new Float32Array(tw * th);
+        for (let i = 0; i < src.p.length; i += 3) {
+          v.set(src.p[i], src.p[i + 1], src.p[i + 2]).applyMatrix4(inv);
+          if (Math.abs(v.z) > TOL * 1.5) continue;
+          const x = Math.floor((v.x / w + 0.5) * tw);
+          const y = Math.floor((0.5 - v.y / h) * th); // canvas row 0 is the plane's top edge
+          if (x < 0 || y < 0 || x >= tw || y >= th) continue;
+          const k = y * tw + x;
+          cnt[k]++;
+          for (let c = 0; c < 3; c++) sum[k * 3 + c] += src.c[i + c];
+        }
+        const tex = fillHoles(sum, cnt, tw, th);
+        if (!tex) continue;
+        const mat = new MeshBasicMaterial({ map: tex });
+        const b = new Mesh(m.geometry, mat);
+        b.position.copy(m.position);
+        b.rotation.copy(m.rotation);
+        // Push it slightly behind the paint plane (planes face +z locally, into the room).
+        b.position.add(new Vector3(0, 0, -BASE_OFFSET).applyEuler(m.rotation));
+        b.name = `BaseCoat_${m.name}`;
+        this.coated.add(id);
+        this.base.push(b);
+        this.group.add(b);
+      }
+    }
+  }
 
   private buildShell(W: number, D: number, H: number) {
     const mk = (id: SurfaceId) => {
@@ -419,6 +479,74 @@ function revealMaterial(reveal: { value: number }, origin: { value: Vector3 }): 
   };
   mat.customProgramCacheKey = () => 'roomshift-reveal';
   return mat;
+}
+
+/**
+ * Turn per-texel colour sums into a texture: average, then grow colour into empty texels from their
+ * neighbours (a few passes cover the gaps between scan points), and give anything still empty the
+ * surface's mean colour. Returns null when the surface has no points at all.
+ */
+function fillHoles(sum: Float32Array, cnt: Float32Array, w: number, h: number): CanvasTexture | null {
+  const n = w * h;
+  const col = new Float32Array(n * 3);
+  const has = new Uint8Array(n);
+  const mean = [0, 0, 0];
+  let seen = 0;
+  for (let k = 0; k < n; k++) {
+    if (!cnt[k]) continue;
+    has[k] = 1;
+    seen++;
+    for (let c = 0; c < 3; c++) {
+      col[k * 3 + c] = sum[k * 3 + c] / cnt[k];
+      mean[c] += col[k * 3 + c];
+    }
+  }
+  if (seen < 20) return null;
+  for (let c = 0; c < 3; c++) mean[c] /= seen;
+  for (let pass = 0; pass < 24; pass++) {
+    const grow: [number, number, number, number][] = [];
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const k = y * w + x;
+        if (has[k]) continue;
+        let r = 0, g = 0, b = 0, m = 0;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+            const q = yy * w + xx;
+            if (!has[q]) continue;
+            r += col[q * 3];
+            g += col[q * 3 + 1];
+            b += col[q * 3 + 2];
+            m++;
+          }
+        if (m) grow.push([k, r / m, g / m, b / m]);
+      }
+    if (!grow.length) break;
+    for (const [k, r, g, b] of grow) {
+      col[k * 3] = r;
+      col[k * 3 + 1] = g;
+      col[k * 3 + 2] = b;
+      has[k] = 1;
+    }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(w, h);
+  for (let k = 0; k < n; k++) {
+    for (let c = 0; c < 3; c++) img.data[k * 4 + c] = Math.round(255 * Math.min(1, has[k] ? col[k * 3 + c] : mean[c]));
+    img.data[k * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  // Soften the texel grid a little.
+  ctx.filter = 'blur(1px)';
+  ctx.drawImage(canvas, 0, 0);
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
 }
 
 /** Another wall material sharing the walls' reveal uniforms (each wall gets its own texture repeat). */

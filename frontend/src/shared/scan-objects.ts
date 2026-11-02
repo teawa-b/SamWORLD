@@ -202,6 +202,84 @@ export function mergeDetections(dets: LiftedDetection[], minShare = 0.25): Merge
   return groups.map((g) => ({ label: g.label, points: [...g.set], detections: g.detections }));
 }
 
+/** Local coordinates of a room-frame point in a box's frame (three.js yaw). */
+function toLocal(box: ObjectBox, p: readonly number[]): [number, number, number] {
+  const c = Math.cos(box.yaw), s = Math.sin(box.yaw);
+  const dx = p[0] - box.centre[0], dz = p[2] - box.centre[2];
+  return [dx * c - dz * s, p[1] - box.centre[1], dx * s + dz * c];
+}
+
+/** True when `p` lies inside `box` grown by `margin` metres on every side. */
+export function insideBox(box: ObjectBox, p: readonly number[], margin = 0): boolean {
+  const l = toLocal(box, p);
+  return Math.abs(l[0]) <= box.size[0] / 2 + margin && Math.abs(l[1]) <= box.size[1] / 2 + margin && Math.abs(l[2]) <= box.size[2] / 2 + margin;
+}
+
+export type BoxedObject = MergedObject & { box: ObjectBox };
+
+/**
+ * Second pass over merged objects, largest first. A smaller object is folded into a larger one when
+ *  - most of its points are the larger one's, whatever the label (SAM found one thing as "nightstand" and
+ *    "side table"; the larger object's label wins), or
+ *  - it has the same label and sits inside the larger one's box (a pillow found as a second "bed").
+ * Then objects with fewer than `minPoints` points are dropped as noise.
+ */
+export function consolidateObjects(objs: MergedObject[], boxOf: (points: number[]) => ObjectBox | null, opts: { share?: number; margin?: number; minPoints?: number } = {}): BoxedObject[] {
+  const share = opts.share ?? 0.5, margin = opts.margin ?? 0.25, minPoints = opts.minPoints ?? 120;
+  const norm = (l: string) => l.trim().toLowerCase();
+  const kept: (BoxedObject & { set: Set<number> })[] = [];
+  for (const o of [...objs].sort((a, b) => b.points.length - a.points.length)) {
+    const box = boxOf(o.points);
+    if (!box) continue;
+    const host = kept.find((k) => {
+      let n = 0;
+      for (const i of o.points) if (k.set.has(i)) n++;
+      if (n / Math.max(1, Math.min(o.points.length, k.set.size)) >= share) return true;
+      return norm(k.label) === norm(o.label) && insideBox(k.box, box.centre, margin);
+    });
+    if (!host) {
+      kept.push({ ...o, box, set: new Set(o.points) });
+      continue;
+    }
+    for (const i of o.points) host.set.add(i);
+    host.points = [...host.set];
+    host.detections = [...host.detections, ...o.detections];
+    host.box = boxOf(host.points) ?? host.box;
+  }
+  return kept.filter((k) => k.points.length >= minPoints).map(({ set: _set, ...k }) => k);
+}
+
+/**
+ * A scan often sees tall furniture (a wardrobe, a bookcase) only from the front, so its box comes out as
+ * thin as card. For grounded objects taller than 40 cm with one floor side under `thin`, push the back
+ * face away from the camera that saw it: to the wall behind when one is within `maxDepth`, otherwise to
+ * `fallback` metres deep.
+ */
+export function thickenFlatBox(box: ObjectBox, shell: RoomShell | null, viewFrom: readonly [number, number], opts: { thin?: number; fallback?: number; maxDepth?: number } = {}): ObjectBox {
+  const thin = opts.thin ?? 0.15, fallback = opts.fallback ?? 0.45, maxDepth = opts.maxDepth ?? 1;
+  const [w, h, d] = box.size;
+  const grounded = box.centre[1] - h / 2 < 0.02;
+  const axis = w < d ? 0 : 2;
+  const t = Math.min(w, d), other = Math.max(w, d);
+  if (!grounded || h < 0.4 || t >= thin || other < 2 * thin) return box;
+  const c = Math.cos(box.yaw), s = Math.sin(box.yaw);
+  // Room-frame [x, z] of the thin local axis: local x → (cos, -sin), local z → (sin, cos).
+  let n: [number, number] = axis === 0 ? [c, -s] : [s, c];
+  if ((box.centre[0] - viewFrom[0]) * n[0] + (box.centre[2] - viewFrom[1]) * n[1] < 0) n = [-n[0], -n[1]];
+  const front: [number, number] = [box.centre[0] - (n[0] * t) / 2, box.centre[2] - (n[1] * t) / 2];
+  let toWall = Infinity;
+  for (const wall of shell?.walls ?? []) {
+    const facing = n[0] * wall.normal[0] + n[1] * wall.normal[1];
+    if (facing > -0.9) continue; // only walls roughly square to the object, behind it
+    const dist = ((front[0] - wall.a[0]) * wall.normal[0] + (front[1] - wall.a[1]) * wall.normal[1]) / -facing;
+    if (dist > t) toWall = Math.min(toWall, dist);
+  }
+  const depth = toWall <= maxDepth ? toWall : fallback;
+  const size: [number, number, number] = [...box.size];
+  size[axis] = depth;
+  return { ...box, size, centre: [front[0] + (n[0] * depth) / 2, box.centre[1], front[1] + (n[1] * depth) / 2] };
+}
+
 /** The detection whose crop shows the object best: big, confident and not cut off by the frame edge. */
 export function bestView(dets: LiftedDetection[]): LiftedDetection {
   const score = (d: LiftedDetection) => Math.sqrt(d.area) * (0.5 + 0.5 * d.score) * (1 - 0.8 * d.edge);

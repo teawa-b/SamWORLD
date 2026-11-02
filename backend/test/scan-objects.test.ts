@@ -9,8 +9,8 @@ process.env.MODEL_API_KEY = '';
 process.env.LOG_LEVEL = 'silent';
 
 const { store } = await import('../src/store.js');
-const { understandScan } = await import('../src/objects.js');
-const { fitRoomShell, transformPointRowMajor, boxOfPoints, mergeDetections } = await import('../src/shared/index.js');
+const { understandScan, encodeRuns, decodeRuns } = await import('../src/objects.js');
+const { fitRoomShell, transformPointRowMajor, boxOfPoints, mergeDetections, consolidateObjects, thickenFlatBox } = await import('../src/shared/index.js');
 
 /** 4 × 3 × 2.4 m room (floor + walls) with a 1.0 × 0.8 × 0.5 m table block centred at x 1.5, z 1.4. */
 function scene() {
@@ -123,5 +123,50 @@ describe('lifting SAM masks into 3D', () => {
     expect(b.size[2]).toBeCloseTo(0.6, 1);
     // three.js: rotation.y = yaw maps local +x to (cos yaw, 0, -sin yaw) = the long axis (cos a, sin a) up to sign.
     expect(Math.abs(Math.cos(b.yaw) * Math.cos(a) - Math.sin(b.yaw) * Math.sin(a))).toBeCloseTo(1, 2);
+  });
+});
+
+describe('object clean-up', () => {
+  const det = { label: '', score: 0.8, points: new Uint32Array(), frame: 0, edge: 0, area: 0.1, bbox: [0, 0, 1, 1] as [number, number, number, number] };
+  const range = (a: number, b: number) => Array.from({ length: b - a }, (_, i) => a + i);
+  // Point k sits at x = k / 100 on a 1 m tall column, so a range of indices is a box along x.
+  const boxOf = (pts: number[]) => {
+    const xs = pts.map((k) => k / 100);
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    return { centre: [(lo + hi) / 2, 0.5, 0] as [number, number, number], size: [hi - lo, 1, 0.5] as [number, number, number], yaw: 0 };
+  };
+
+  it('folds a same-object detection under another label, and a fragment inside a bigger copy', () => {
+    const out = consolidateObjects(
+      [
+        { label: 'nightstand', points: range(0, 200), detections: [det] },
+        { label: 'side table', points: range(0, 190), detections: [det] },
+        { label: 'bed', points: range(1000, 1400), detections: [det] },
+        // Same label, its own points, but inside the big bed's box: a pillow found as a second bed.
+        { label: 'bed', points: range(1100, 1250).map((k) => k + 0.5), detections: [det] },
+        { label: 'chair', points: range(5000, 5059), detections: [det] },
+      ],
+      boxOf,
+    );
+    expect(out.map((o) => o.label)).toEqual(['bed', 'nightstand']);
+    expect(out[1].detections).toHaveLength(2);
+  });
+
+  it('gives a front-only wardrobe depth: to the wall behind, or a default', () => {
+    const wardrobe = { centre: [0, 0.9, 1.0] as [number, number, number], size: [0.9, 1.8, 0.05] as [number, number, number], yaw: 0 };
+    const shell = { walls: [{ a: [-2, 1.6] as [number, number], b: [2, 1.6] as [number, number], normal: [0, -1] as [number, number], inferred: false, support: 1 }] } as never;
+    const toWall = thickenFlatBox(wardrobe, shell, [0, -1]);
+    expect(toWall.size[2]).toBeCloseTo(0.625, 2);
+    expect(toWall.centre[2]).toBeCloseTo(0.975 + 0.3125, 2);
+    expect(thickenFlatBox(wardrobe, null, [0, -1]).size[2]).toBeCloseTo(0.45, 2);
+    // Seen from behind: grows the other way.
+    expect(thickenFlatBox(wardrobe, null, [0, 3]).centre[2]).toBeLessThan(1);
+    // A curtain off the floor stays thin.
+    expect(thickenFlatBox({ ...wardrobe, centre: [0, 1.3, 1] }, null, [0, -1]).size[2]).toBe(0.05);
+  });
+
+  it('round-trips masks through the run-length cache', () => {
+    const r = Uint8Array.from([1, 1, 0, 0, 0, 1, 0, 1, 1, 1]);
+    expect([...decodeRuns(encodeRuns(r), r.length)]).toEqual([...r]);
   });
 });

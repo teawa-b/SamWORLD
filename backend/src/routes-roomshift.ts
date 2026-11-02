@@ -19,6 +19,7 @@ import { fitRoomShell, parsePly } from './shared/index.js';
 import { store, type Restyle, type Scan, type ScanCamera } from './store.js';
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
+const CLOUD_FORMAT = 'voxel-1cm-1m';
 
 function requireScan(id: string): Scan {
   const s = store.get('scans', parse(Id, id));
@@ -42,7 +43,8 @@ async function reconstruct(scan: Scan): Promise<void> {
   const t0 = Date.now();
   try {
     const frames = await Promise.all(scan.frames.map(async (f) => (await readFile(join(scanDir(scan.id), f.file))).toString('base64')));
-    const hash = createHash('sha256');
+    // Bump CLOUD_FORMAT when the worker's output changes so existing scans can be rebuilt.
+    const hash = createHash('sha256').update(CLOUD_FORMAT);
     for (const f of frames) hash.update(f);
     const key = hash.digest('hex').slice(0, 24);
     const cached = join(scanDir(scan.id), `${key}.json`);

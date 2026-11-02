@@ -3,8 +3,10 @@
  * SAM 3.1 outlines each one in every keyframe, and the masks are lifted into 3D boxes through the scan's
  * cameras and point cloud (shared/scan-objects.ts). The clearest view of each object is saved as a crop for
  * restyling later. Needs MODEL_API_KEY; without it the step is skipped and the room still works.
+ * Muse's list and every SAM answer are cached per scan, so running the step again costs no Meta calls.
  */
-import { readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
@@ -16,15 +18,17 @@ import { segmentConcept } from './meta/sam.js';
 import {
   bestView,
   boxOfPoints,
+  consolidateObjects,
   maskPoints,
   mergeDetections,
   onShell,
   parsePly,
   roomPoint,
+  thickenFlatBox,
+  transformPointRowMajor,
   visiblePixels,
   type LiftedDetection,
   type LiftMask,
-  type ObjectBox,
 } from './shared/index.js';
 import { store, type Scan, type ScanObject } from './store.js';
 
@@ -32,7 +36,8 @@ export const OBJECTS_PROMPT_VERSION = 'roomshift-objects-v1';
 const KEYFRAMES = 6;
 const MAX_CONCEPTS = 8;
 const MAX_OBJECTS = 12;
-const MIN_POINTS = 30;
+const MIN_DETECTION_POINTS = 30;
+const MIN_OBJECT_POINTS = 120;
 
 /** One SAM detection, mask as a full-frame raster. */
 export interface FrameDetection {
@@ -97,6 +102,60 @@ function fullFrame(m: { bounds: { left: number; top: number; right: number; bott
 }
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
+
+/** Run-length code for 0/1 rasters: alternating run lengths, starting with zeros. */
+export function encodeRuns(r: Uint8Array): number[] {
+  const out: number[] = [];
+  let cur = 0, n = 0;
+  for (const v of r) {
+    if (v === cur) n++;
+    else {
+      out.push(n);
+      cur = v;
+      n = 1;
+    }
+  }
+  out.push(n);
+  return out;
+}
+
+export function decodeRuns(runs: number[], length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let at = 0;
+  runs.forEach((n, k) => {
+    if (k % 2) out.fill(1, at, at + n);
+    at += n;
+  });
+  return out;
+}
+
+/** Wrap the Meta calls with a per-scan disk cache (successes only). */
+function cached(scan: Scan, deps: UnderstandDeps): UnderstandDeps {
+  const dir = join(scanDir(scan.id), 'objects-cache', OBJECTS_PROMPT_VERSION);
+  const read = async <T>(f: string): Promise<T | null> => (existsSync(join(dir, f)) ? JSON.parse(await readFile(join(dir, f), 'utf8')) : null);
+  const write = async (f: string, v: unknown) => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, f), JSON.stringify(v));
+  };
+  return {
+    async listObjects(images, budget) {
+      const hit = await read<{ concepts: string[]; model: string }>('list.json');
+      if (hit) return { ...hit, model: `${hit.model} (cached)` };
+      const r = await deps.listObjects(images, budget);
+      await write('list.json', r);
+      return r;
+    },
+    async segment(url, size, concept, budget, frame) {
+      const f = `sam-${frame}-${concept.replace(/\W+/g, '-')}.json`;
+      type Row = { score: number; bbox: FrameDetection['bbox']; width: number; height: number; runs: number[] };
+      const hit = await read<Row[]>(f);
+      if (hit) return hit.map((d) => ({ score: d.score, bbox: d.bbox, mask: { raster: decodeRuns(d.runs, d.width * d.height), width: d.width, height: d.height } }));
+      const r = await deps.segment(url, size, concept, budget, frame);
+      await write(f, r.map((d): Row => ({ score: d.score, bbox: d.bbox, width: d.mask.width, height: d.mask.height, runs: encodeRuns(d.mask.raster) })));
+      return r;
+    },
+  };
+}
 const dataUrl = (buf: Buffer, file: string) => `data:image/${file.endsWith('.png') ? 'png' : file.endsWith('.webp') ? 'webp' : 'jpeg'};base64,${buf.toString('base64')}`;
 
 /** Find, lift and save the scan's objects. Progress and the result are saved on the scan record. */
@@ -106,6 +165,7 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
   if (deps === metaDeps && !metaConfigured()) return status('skipped', 'Objects need MODEL_API_KEY (SAM 3.1 + Muse Spark); the room works without them.');
   if (!scan.cloud || !scan.cameras.length) return status('skipped', 'No reconstruction to find objects in.');
   const budget = new AiBudget(KEYFRAMES * MAX_CONCEPTS + 2);
+  deps = cached(scan, deps);
   try {
     const n = Math.min(scan.frames.length, scan.cameras.length);
     const picks = [...new Set(Array.from({ length: Math.min(KEYFRAMES, n) }, (_, i) => Math.floor(((i + 0.5) / Math.min(KEYFRAMES, n)) * n)))];
@@ -159,18 +219,16 @@ export async function understandScan(scan: Scan, deps: UnderstandDeps = metaDeps
       }
     });
 
-    const merged = mergeDetections(lifted.filter((d) => d.points.length >= MIN_POINTS))
-      .filter((o) => o.points.length >= MIN_POINTS)
-      .sort((a, b) => b.points.length - a.points.length)
-      .slice(0, MAX_OBJECTS);
+    const boxOf = (pts: number[]) => boxOfPoints(pts.map((k) => [room[k * 3], room[k * 3 + 1], room[k * 3 + 2]]));
+    const merged = consolidateObjects(mergeDetections(lifted.filter((d) => d.points.length >= MIN_DETECTION_POINTS)), boxOf, { minPoints: MIN_OBJECT_POINTS }).slice(0, MAX_OBJECTS);
     const objects: ScanObject[] = [];
     const counts = new Map<string, number>();
     for (const o of merged) {
-      const box: ObjectBox | null = boxOfPoints(o.points.map((k) => [room[k * 3], room[k * 3 + 1], room[k * 3 + 2]]));
-      if (!box) continue;
       const nth = (counts.get(o.label) ?? 0) + 1;
       counts.set(o.label, nth);
       const view = bestView(o.detections);
+      const eye = transformPointRowMajor(align, [scan.cameras[view.frame].pose[3], scan.cameras[view.frame].pose[7], scan.cameras[view.frame].pose[11]]);
+      const box = thickenFlatBox(o.box, shell, [eye[0], eye[2]]);
       const id = `obj-${objects.length + 1}`;
       const frame = frames.find((f) => f.i === view.frame)!;
       let crop: string | null = null;
