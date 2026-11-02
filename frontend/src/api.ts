@@ -3,7 +3,7 @@
  * in the browser). If the backend is unreachable it falls back to scenes
  * baked into /cached by the backend's `npm run bake`, read-only.
  */
-import type { FloorplanInterpretation, PlanLevel, Property, PropertyMedia, ReconstructionRun, RoomMappingPatch, SceneCorrectionPatch, SceneManifest } from './shared/index.js';
+import type { FloorplanInterpretation, PlanLevel, RoomHint, Property, PropertyMedia, ReconstructionRun, RoomMappingPatch, SceneCorrectionPatch, SceneManifest } from './shared/index.js';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 const STATIC = `${import.meta.env.BASE_URL}cached/`;
@@ -148,7 +148,7 @@ export const api = {
     call<{ media: PropertyMedia }>(`/api/media/${mediaId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteMedia: (mediaId: string) => call(`/api/media/${mediaId}`, { method: 'DELETE', headers: {} }),
   reorderMedia: (propertyId: string, mediaIds: string[]) => call<{ media: PropertyMedia[] }>(`/api/properties/${propertyId}/media-order`, { method: 'PUT', body: JSON.stringify({ mediaIds }) }),
-  updateProperty: (propertyId: string, patch: { address?: string; bedrooms?: number | null; bathrooms?: number | null; floors?: number | null; areaSqM?: number | null }) =>
+  updateProperty: (propertyId: string, patch: { address?: string; bedrooms?: number | null; bathrooms?: number | null; floors?: number | null; areaSqM?: number | null; roomHints?: RoomHint[]; hallway?: boolean | null; exterior?: Property['exterior'] }) =>
     call<{ property: Property }>(`/api/properties/${propertyId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   suggestRooms: (propertyId: string) => call<{ media: PropertyMedia[]; aiCalls: number; model: string }>(`/api/properties/${propertyId}/media/suggest`, { method: 'POST', body: '{}' }),
   interpretation: (propertyId: string) => call<{ interpretation: FloorplanInterpretation | null }>(`/api/properties/${propertyId}/interpretation`),

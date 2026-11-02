@@ -6,3 +6,4 @@ export * from './viewpoints.js';
 export * from './layout.js';
 export * from './typical.js';
 export * from './splat.js';
+export * from './solver.js';

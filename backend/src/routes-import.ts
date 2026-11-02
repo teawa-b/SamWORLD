@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { FloorplanInterpretation, PlanLevel, polygonArea, polygonSelfIntersects } from './shared/index.js';
+import { FloorplanInterpretation, PlanLevel, polygonArea, polygonSelfIntersects, RoomHint, ExteriorFinish } from './shared/index.js';
 import { config, metaConfigured } from './config.js';
 import { HttpError, Id, now, parse, rateLimit, requireProperty } from './http.js';
 import { flattenTransparentPng, toDataUrl } from './lib/image.js';
@@ -164,7 +164,7 @@ export async function registerImportRoutes(app: FastifyInstance) {
 
   app.patch('/api/properties/:propertyId', async (req) => {
     const property = requireProperty((req.params as { propertyId: string }).propertyId);
-    const p = parse(z.object({ address: z.string().min(1).max(200).optional(), bedrooms: z.number().int().min(0).max(30).nullable().optional(), bathrooms: z.number().min(0).max(20).nullable().optional(), floors: z.number().int().min(1).max(6).nullable().optional(), areaSqM: z.number().positive().max(5000).nullable().optional() }), req.body);
+    const p = parse(z.object({ address: z.string().min(1).max(200).optional(), bedrooms: z.number().int().min(0).max(30).nullable().optional(), bathrooms: z.number().min(0).max(20).nullable().optional(), floors: z.number().int().min(1).max(6).nullable().optional(), roomHints: z.array(RoomHint).max(30).optional(), hallway: z.boolean().nullable().optional(), exterior: ExteriorFinish.optional(), areaSqM: z.number().positive().max(5000).nullable().optional() }), req.body);
     const next = { ...property, ...Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)), updatedAt: now() };
     await store.put('properties', property.id, next);
     return { property: next };

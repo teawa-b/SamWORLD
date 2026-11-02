@@ -19,7 +19,7 @@ import type { Detection, EvidenceFlags, SceneObject, StepLog } from '../shared/i
 import { config } from '../config.js';
 import { store } from '../store.js';
 import { resolveStorageKey } from '../providers/fixture.js';
-import { toDataUrl } from '../lib/image.js';
+import { imageSize, toDataUrl } from '../lib/image.js';
 
 interface WorkerReply {
   status: 'ok' | 'error';
@@ -91,7 +91,7 @@ function falFiles(node: unknown, path = '', out: { url: string; path: string }[]
 /** Pick the asset to show: a GLB mesh when there is one, otherwise a PLY (Gaussian splat). Exported for tests. */
 export function pickFalAsset(result: unknown): { url: string; format: 'glb' | 'ply-splat'; path: string } | null {
   const files = falFiles(result);
-  const glb = files.find((f) => /\.glb(\?|$)/i.test(f.url) || /glb/i.test(f.path));
+  const glb = files.find((f) => /^individual_glbs/.test(f.path)) ?? files.find((f) => /\.glb(\?|$)/i.test(f.url) || /glb/i.test(f.path));
   if (glb) return { url: glb.url, format: 'glb', path: glb.path };
   const ply = files.find((f) => /\.ply(\?|$)/i.test(f.url) || /splat|ply|gaussian/i.test(f.path));
   return ply ? { url: ply.url, format: 'ply-splat', path: ply.path } : null;
@@ -100,46 +100,58 @@ export function pickFalAsset(result: unknown): { url: string; format: 'glb' | 'p
 const FAL_ASSET_HOSTS = /(^|\.)(fal\.media|fal\.run|fal\.ai|fal-cdn\.batch\.fal\.ai)$/;
 
 /**
- * fal.ai queue API: submit, poll, fetch the result, download the asset.
- * Input uses only fields fal documents for this endpoint (image_url, prompt, seed); the SAM 3.1
- * detection's concept is the prompt that tells SAM 3D which object in the photo to build.
+ * fal.ai SAM 3D Objects, called the way the working formbar project does
+ * (teawa-b/fal-hack-formbar, src/lib/scene-lift/sam3-lift.ts):
+ *  - the photo is uploaded to fal storage first (fal workers can't fetch data: URIs or private hosts)
+ *  - the object is picked by `prompt` (the SAM 3.1 concept) + `box_prompts` (its box in pixels)
+ *  - `export_textured_glb: true` so the mesh carries the photo's colours
+ *  - the result is a GLB mesh (`individual_glbs[0]`, else `model_glb`); its OpenCV-space
+ *    translation/rotation are ignored — WalkIn places the object by the room layout.
  */
 async function callFal(i: ProviderInput): Promise<WorkerReply> {
   const started = Date.now();
-  const deadline = started + config.sam3d.timeoutSeconds * 1000;
-  const headers = { authorization: `Key ${config.sam3d.falKey}`, 'content-type': 'application/json' };
-  const base = `https://queue.fal.run/${config.sam3d.falEndpoint}`;
-  const submit = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ image_url: i.imageDataUrl, prompt: i.category, seed: 42 }), signal: AbortSignal.timeout(60000) });
-  const sub = (await submit.json().catch(() => ({}))) as { request_id?: string; status_url?: string; response_url?: string; detail?: unknown };
-  if (!submit.ok || !sub.request_id) return { status: 'error', objectId: i.objectId, diagnostics: [`fal submit HTTP ${submit.status}: ${JSON.stringify(sub.detail ?? sub).slice(0, 300)}`] };
-  const statusUrl = sub.status_url ?? `${base}/requests/${sub.request_id}/status`;
-  const responseUrl = sub.response_url ?? `${base}/requests/${sub.request_id}`;
-  for (;;) {
-    if (Date.now() > deadline) return { status: 'error', objectId: i.objectId, diagnostics: [`fal request ${sub.request_id} still running after ${config.sam3d.timeoutSeconds}s (timeout)`] };
-    await new Promise((r) => setTimeout(r, 3000));
-    const st = await fetch(statusUrl, { headers, signal: AbortSignal.timeout(30000) });
-    const sj = (await st.json().catch(() => ({}))) as { status?: string; error?: unknown };
-    if (sj.status === 'COMPLETED') break;
-    if (!st.ok || sj.error || (sj.status && !['IN_QUEUE', 'IN_PROGRESS'].includes(sj.status))) return { status: 'error', objectId: i.objectId, diagnostics: [`fal status ${st.status} ${sj.status ?? ''}: ${JSON.stringify(sj.error ?? '').slice(0, 300)}`] };
+  const { fal } = await import('@fal-ai/client');
+  fal.config({ credentials: config.sam3d.falKey });
+  const [meta, b64] = i.imageDataUrl.split(',', 2);
+  const mime = meta.match(/data:([^;]+)/)?.[1] ?? 'image/jpeg';
+  const buf = Buffer.from(b64, 'base64');
+  const imageUrl = await fal.storage.upload(new Blob([buf], { type: mime }));
+  const size = imageSize(buf);
+  const [x0, y0, x1, y1] = i.box;
+  const input: Record<string, unknown> = { image_url: imageUrl, prompt: i.category, export_textured_glb: true };
+  if (size) {
+    const W = size.width;
+    const H = size.height;
+    const xm = Math.max(0, Math.min(W - 2, Math.round(x0 * W)));
+    const ym = Math.max(0, Math.min(H - 2, Math.round(y0 * H)));
+    input.box_prompts = [{ x_min: xm, y_min: ym, x_max: Math.max(xm + 1, Math.min(W - 1, Math.round(x1 * W))), y_max: Math.max(ym + 1, Math.min(H - 1, Math.round(y1 * H))) }];
   }
-  const rr = await fetch(responseUrl, { headers, signal: AbortSignal.timeout(60000) });
-  const result = await rr.json().catch(() => null);
-  if (!rr.ok || !result) return { status: 'error', objectId: i.objectId, diagnostics: [`fal result HTTP ${rr.status}: ${JSON.stringify(result).slice(0, 300)}`] };
-  const asset = pickFalAsset(result);
-  if (!asset) return { status: 'error', objectId: i.objectId, diagnostics: [`fal returned no GLB or PLY file. Keys: ${falFiles(result).map((f) => f.path).join(', ') || 'none'}`] };
+  let data: Record<string, unknown>;
+  try {
+    const r = await Promise.race([
+      fal.subscribe(config.sam3d.falEndpoint, { input }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`timeout after ${config.sam3d.timeoutSeconds}s`)), config.sam3d.timeoutSeconds * 1000)),
+    ]);
+    data = r.data as Record<string, unknown>;
+  } catch (e) {
+    const err = e as { message?: string; body?: unknown; status?: number };
+    return { status: 'error', objectId: i.objectId, diagnostics: [`fal ${err.status ?? ''} ${err.message ?? e}: ${JSON.stringify(err.body ?? '').slice(0, 300)}`] };
+  }
+  const asset = pickFalAsset(data);
+  if (!asset) return { status: 'error', objectId: i.objectId, diagnostics: [`fal returned no GLB or PLY file. Keys: ${falFiles(data).map((f) => f.path).join(', ') || 'none'}`] };
   const host = new URL(asset.url).hostname;
   if (!FAL_ASSET_HOSTS.test(host)) return { status: 'error', objectId: i.objectId, diagnostics: [`fal asset on unexpected host ${host}; not downloaded`] };
   const file = await fetch(asset.url, { signal: AbortSignal.timeout(120000) });
-  const buf = Buffer.from(await file.arrayBuffer());
-  if (!file.ok || buf.length > 200 * 1024 * 1024) return { status: 'error', objectId: i.objectId, diagnostics: [`fal asset download failed (HTTP ${file.status}, ${buf.length} bytes)`] };
+  const out = Buffer.from(await file.arrayBuffer());
+  if (!file.ok || out.length > 200 * 1024 * 1024) return { status: 'error', objectId: i.objectId, diagnostics: [`fal asset download failed (HTTP ${file.status}, ${out.length} bytes)`] };
   return {
     status: 'ok',
     objectId: i.objectId,
     format: asset.format,
-    assetBase64: buf.toString('base64'),
+    assetBase64: out.toString('base64'),
     modelVersion: `fal:${config.sam3d.falEndpoint}`,
     durationSeconds: Math.round((Date.now() - started) / 100) / 10,
-    diagnostics: [`fal request ${sub.request_id}; asset from ${asset.path}`],
+    diagnostics: [`asset from ${asset.path}`],
   };
 }
 

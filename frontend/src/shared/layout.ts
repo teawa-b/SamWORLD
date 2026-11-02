@@ -10,14 +10,31 @@
  * estimated everywhere downstream.
  */
 import type { FloorplanInterpretation, PlanLevel, PlanOpening, PlanRoom, Provenance, RoomType } from './schemas.js';
+import { solveSingleStoreyLayout } from './solver.js';
 
 export interface RoomSpec {
   label: string;
   type: RoomType;
   areaM2: number;
   level: number;
-  /** Street side or garden side, when the photos, label or description say so. */
-  side?: 'front' | 'rear' | 'unknown';
+  /** Which side of the home the room is on, when photos, labels or description say so. */
+  side?: 'front' | 'rear' | 'left' | 'right' | 'unknown';
+  /** Rough interior size seen in the photos (shape matters more than exact metres). */
+  widthM?: number | null;
+  depthM?: number | null;
+  /** The main entrance (front door) opens into this room. */
+  entrance?: boolean;
+  /** How many outside walls with windows the photos show (2 = corner room). */
+  exteriorWalls?: number | null;
+  /** Rooms this one opens into: through a door, or open-plan with no wall. */
+  connectsTo?: { label: string; kind: 'door' | 'open' }[];
+}
+
+export interface LayoutHints {
+  /** False when the photos show rooms opening off each other with no hallway. */
+  hallway?: boolean | null;
+  /** Footprint width / depth (front edge is the width). */
+  aspect?: number | null;
 }
 
 export interface ListingFacts {
@@ -119,7 +136,13 @@ export function layoutFromRoomList(input: {
   uncertainties?: string[];
   confidence: number;
   layoutSource?: 'photos' | 'listing-details';
+  hints?: LayoutHints;
 }): FloorplanInterpretation {
+  // Single storey: arrange by the photo evidence (see solver.ts). Multi-storey keeps the corridor plan below.
+  if (input.rooms.length && input.rooms.every((r) => r.level === 0)) {
+    const { score: _score, ...interp } = solveSingleStoreyLayout(input);
+    return interp;
+  }
   const byLevel = new Map<number, RoomSpec[]>();
   for (const r of input.rooms.filter((r) => r.areaM2 > 0.5)) {
     if (!byLevel.has(r.level)) byLevel.set(r.level, []);
@@ -215,4 +238,72 @@ export function layoutFromRoomList(input: {
     ],
     provenance: input.provenance,
   };
+}
+
+/** Room type from a free-text label ("Bedroom 2", "Lounge", "En-suite"). */
+export function typeFromLabel(label: string): RoomType | null {
+  const l = label.toLowerCase();
+  const T: [RegExp, RoomType][] = [
+    [/kitchen/, 'kitchen'],
+    [/en-?suite|bath|shower/, 'bathroom'],
+    [/\bwc\b|toilet|cloak/, 'wc'],
+    [/bed/, 'bedroom'],
+    [/dining/, 'dining'],
+    [/living|lounge|sitting|reception|family/, 'living'],
+    [/hall|entrance|foyer/, 'hall'],
+    [/landing/, 'landing'],
+    [/study|office/, 'study'],
+    [/utility|laundry/, 'utility'],
+  ];
+  return T.find(([re]) => re.test(l))?.[1] ?? null;
+}
+
+const DEFAULT_AREA: Record<RoomType, number> = { living: 18, kitchen: 10, dining: 11, bedroom: 11, bathroom: 5, wc: 2.5, hall: 5, landing: 5, utility: 4, study: 8, other: 8 };
+
+/**
+ * The room list for an estimated layout: rooms the person labelled (or Muse
+ * named) come first, the listing facts fill in rooms nobody photographed, and
+ * the layout hints are attached by label.
+ */
+export function roomListFromEvidence(facts: ListingFacts, labels: string[], hints: {
+  label: string;
+  side?: RoomSpec['side'];
+  entrance?: boolean;
+  exteriorWalls?: number | null;
+  widthM?: number | null;
+  depthM?: number | null;
+  connectsTo?: { label: string; kind: 'door' | 'open' }[];
+}[] = []): RoomSpec[] {
+  const base = roomListFromFacts(facts);
+  const out: RoomSpec[] = [];
+  const used = new Set<RoomSpec>();
+  const names = [...new Set([...labels, ...hints.map((h) => h.label)].map((l) => l.trim()).filter(Boolean))];
+  for (const name of names) {
+    const type = typeFromLabel(name);
+    if (!type) continue; // "Exterior", "Garden": not a room of the house
+    // Reuse a facts room of the same type (keeps sizes sensible), renamed to the person's label.
+    const exact = base.find((r) => !used.has(r) && r.label.toLowerCase() === name.toLowerCase());
+    const same = exact ?? base.find((r) => !used.has(r) && (r.type === type || (type === 'dining' && r.type === 'living')));
+    if (same) used.add(same);
+    out.push({ ...(same ?? { areaM2: DEFAULT_AREA[type], level: 0 }), label: name, type });
+  }
+  for (const r of base) if (!used.has(r) && !out.some((o) => o.label.toLowerCase() === r.label.toLowerCase())) out.push(r);
+  // Keep the total close to the stated area.
+  if (facts.areaSqM) {
+    const sum = out.reduce((a, r) => a + r.areaM2, 0);
+    const k = (facts.areaSqM * 0.88) / sum;
+    if (k > 0.5 && k < 3) out.forEach((r) => (r.areaM2 = Math.round(r.areaM2 * k * 10) / 10));
+  }
+  for (const h of hints) {
+    const r = out.find((o) => o.label.toLowerCase() === h.label.trim().toLowerCase());
+    if (!r) continue;
+    Object.assign(r, {
+      ...(h.side ? { side: h.side } : {}),
+      ...(h.entrance ? { entrance: true } : {}),
+      ...(h.exteriorWalls != null ? { exteriorWalls: h.exteriorWalls } : {}),
+      ...(h.widthM && h.depthM ? { widthM: h.widthM, depthM: h.depthM } : {}),
+      ...(h.connectsTo?.length ? { connectsTo: h.connectsTo } : {}),
+    });
+  }
+  return out;
 }

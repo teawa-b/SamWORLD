@@ -174,7 +174,7 @@ export function buildHouse(scene: SceneManifest, opts: BuildOptions): HouseBuild
         s.rooms.find((r) => r.levelId === level.id && wall.roomIds.includes(r.id) && pointInPolygon([wallMid[0] + n[0] * 0.2 * sgn, wallMid[1] + n[1] * 0.2 * sgn], r.polygonXZMeters));
       const plusZ = roomAt(1);
       const minusZ = roomAt(-1);
-      const faceMat = (r: Room | undefined) => (r ? wallMats.get(r.id)! : exteriorMaterial());
+      const faceMat = (r: Room | undefined) => (r ? wallMats.get(r.id)! : exteriorMaterial(scene.property.exterior));
       // One mesh per side: box faces 0-3 (edges) and 4 (+Z) take side A, face 5 (-Z) side B.
       const sideA: BufferGeometry[] = [];
       const sideB: BufferGeometry[] = [];
@@ -251,6 +251,9 @@ export function buildHouse(scene: SceneManifest, opts: BuildOptions): HouseBuild
   const topRooms = s.rooms.filter((r) => r.levelId === top.id).flatMap((r) => r.polygonXZMeters);
   if (topRooms.length) {
     roof = buildRoof(topRooms, topElevation);
+    // Roof colour from the review screen (flat roofs stay pitched geometry for now, but take the colour).
+    if (scene.property.exterior) (mats.roof as MeshStandardMaterial).color.set(scene.property.exterior.roofColor);
+    else (mats.roof as MeshStandardMaterial).color.set(0x7a4b3a);
     shell.add(roof);
   }
 

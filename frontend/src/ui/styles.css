@@ -439,3 +439,16 @@ label.det .cap { position: absolute; left: 0; bottom: 0; right: 0; font-size: 11
 .pe-stair { fill: rgba(140, 100, 60, 0.25); stroke: #8c643c; stroke-dasharray: 6 4; cursor: pointer; }
 .pe-preview { fill: rgba(47, 111, 237, 0.12); stroke: #2f6fed; stroke-dasharray: 6 4; }
 @media (max-width: 899px) { .pe-main { grid-template-columns: 1fr; grid-template-rows: auto minmax(300px, 1fr) auto; } .pe-tools { grid-auto-flow: column; overflow-x: auto; border-right: 0; } }
+
+/* room relationship hints (review screen, no floor plan) */
+.hint-hall { display: grid; gap: 4px; max-width: 320px; margin: 6px 0 10px; }
+.hints { display: grid; gap: 8px; }
+.hint-row { padding: 10px 12px; display: grid; gap: 8px; }
+.hint-ctl { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.hint-ctl select { max-width: 190px; }
+.hint-links { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.hint-links .chip { height: 30px; font-size: 13px; }
+
+.ext-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ext-row select { max-width: 220px; }
+.ext-row input[type=color] { width: 40px; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 2px; background: var(--surface); }

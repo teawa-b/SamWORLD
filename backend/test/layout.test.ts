@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildStructure, computeViewpoints, layoutFromRoomList, placeObjects, typicalFurniture, roomListFromFacts, verifyGeometry, type Provenance } from '../src/shared/index.js';
+import { buildStructure, computeViewpoints, layoutFromRoomList, placeObjects, typicalFurniture, roomListFromEvidence, roomListFromFacts, verifyGeometry, type Provenance } from '../src/shared/index.js';
 
 const prov: Provenance = { method: 'deterministic', note: 'test', at: '' };
 const build = (facts: Parameters<typeof roomListFromFacts>[0]) => {
@@ -77,5 +77,53 @@ describe('estimated layouts (no floor plan)', () => {
     const ok = placed.objects.length;
     expect(ok).toBeGreaterThan(cands.length * 0.7);
     expect(structure.rooms.filter((r) => r.type === 'bedroom').every((r) => placed.objects.some((o) => o.roomId === r.id && o.kind === 'bed'))).toBe(true);
+  });
+});
+
+describe('evidence-driven single-storey layout', () => {
+  const prov: Provenance = { method: 'deterministic', at: '2026-11-02T00:00:00Z' };
+  const facts = { bedrooms: 3, bathrooms: 2, areaSqM: 109, propertyType: 'Single Family Residence', floors: 1 };
+  const labels = ['Living room', 'Kitchen', 'Bedroom 1', 'Bedroom 2', 'Bathroom 1'];
+  const hints = [
+    { label: 'Living room', side: 'front' as const, entrance: true, connectsTo: [{ label: 'Kitchen', kind: 'door' as const }] },
+    { label: 'Kitchen', side: 'rear' as const },
+    { label: 'Bedroom 1', exteriorWalls: 2 },
+    { label: 'Bedroom 2', exteriorWalls: 2 },
+  ];
+
+  it('builds the room list from photo labels plus the listing facts', () => {
+    const rooms = roomListFromEvidence(facts, [...labels, 'Exterior'], hints);
+    expect(rooms.map((r) => r.label).sort()).toEqual(['Bathroom 1', 'Bathroom 2', 'Bedroom 1', 'Bedroom 2', 'Bedroom 3', 'Kitchen', 'Living room']);
+    expect(rooms.find((r) => r.label === 'Living room')!.entrance).toBe(true);
+  });
+
+  it('places rooms where the photos say and keeps every room reachable', () => {
+    const interp = layoutFromRoomList({ rooms: roomListFromEvidence(facts, labels, hints), statedTotalAreaSqM: 109, provenance: prov, confidence: 0.4, layoutSource: 'photos' });
+    const structure = buildStructure(interp, { propertyId: 'p', scaleOverride: { metersPerPx: 0.01, method: 'estimated-layout' } });
+    const checks = verifyGeometry(structure, interp, [], [], 109);
+    expect(checks.filter((c) => c.severity === 'fail')).toEqual([]);
+    expect(checks.find((c) => c.id === 'connectivity')?.severity).toBe('pass');
+    const b = structure.footprintBounds;
+    const room = (l: string) => structure.rooms.find((r) => r.label === l)!;
+    const touches = (l: string) => {
+      const xs = room(l).polygonXZMeters.map((p) => p[0]);
+      const zs = room(l).polygonXZMeters.map((p) => p[1]);
+      return { front: Math.max(...zs) > b.max[1] - 0.05, rear: Math.min(...zs) < b.min[1] + 0.05, left: Math.min(...xs) < b.min[0] + 0.05, right: Math.max(...xs) > b.max[0] - 0.05 };
+    };
+    expect(touches('Living room').front).toBe(true);
+    expect(touches('Kitchen').rear).toBe(true);
+    for (const l of ['Bedroom 1', 'Bedroom 2']) expect(Object.values(touches(l)).filter(Boolean).length).toBeGreaterThanOrEqual(2);
+    // The stated living room ↔ kitchen connection is a real door gap in a shared wall.
+    const door = structure.openings.find((o) => o.roomIds.includes(room('Living room').id) && o.roomIds.includes(room('Kitchen').id));
+    expect(door?.parentWallId).toBeTruthy();
+    // Front door is in the living room.
+    expect(structure.openings.some((o) => o.type === 'door' && o.roomIds.length === 1 && o.roomIds[0] === room('Living room').id)).toBe(true);
+    expect(interp.uncertainties.join(' ')).toMatch(/1 of 1 room connections satisfied/);
+  });
+
+  it('is deterministic', () => {
+    const a = layoutFromRoomList({ rooms: roomListFromEvidence(facts, labels, hints), statedTotalAreaSqM: 109, provenance: prov, confidence: 0.4 });
+    const b = layoutFromRoomList({ rooms: roomListFromEvidence(facts, labels, hints), statedTotalAreaSqM: 109, provenance: prov, confidence: 0.4 });
+    expect(JSON.stringify(a.levels)).toEqual(JSON.stringify(b.levels));
   });
 });

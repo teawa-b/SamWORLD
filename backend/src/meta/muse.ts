@@ -27,7 +27,7 @@ export const PROMPT_VERSIONS = {
   placement: 'placement-v1',
   planReview: 'plan-review-v1',
   surfaces: 'surfaces-v1',
-  layoutFromPhotos: 'layout-from-photos-v2',
+  layoutFromPhotos: 'layout-from-photos-v3',
   furnish: 'furnish-v1',
 };
 
@@ -192,16 +192,46 @@ export function assembleInterpretation(
 const layoutSchema = obj({
   floorplanPhotoIndex: { type: ['integer', 'null'] },
   floors: { type: 'integer' },
+  hallway: { type: ['boolean', 'null'] },
+  footprintAspect: { type: ['number', 'null'] },
   rooms: {
     type: 'array',
-    items: obj({ label: str, type: { type: 'string', enum: RoomType.options }, areaM2: num, level: { type: 'integer' }, side: { type: 'string', enum: ['front', 'rear', 'unknown'] }, photoIndexes: { type: 'array', items: { type: 'integer' } } }),
+    items: obj({
+      label: str,
+      type: { type: 'string', enum: RoomType.options },
+      areaM2: num,
+      widthM: { type: ['number', 'null'] },
+      depthM: { type: ['number', 'null'] },
+      level: { type: 'integer' },
+      side: { type: 'string', enum: ['front', 'rear', 'left', 'right', 'unknown'] },
+      entrance: { type: 'boolean' },
+      exteriorWalls: { type: ['integer', 'null'] },
+      connectsTo: { type: 'array', items: obj({ label: str, kind: { type: 'string', enum: ['door', 'open'] } }) },
+      photoIndexes: { type: 'array', items: { type: 'integer' } },
+    }),
   },
   notes: { type: 'array', items: str },
 });
 
+type LayoutRoom = {
+  label: string;
+  type: z.infer<typeof RoomType>;
+  areaM2: number;
+  widthM: number | null;
+  depthM: number | null;
+  level: number;
+  side: 'front' | 'rear' | 'left' | 'right' | 'unknown';
+  entrance: boolean;
+  exteriorWalls: number | null;
+  connectsTo: { label: string; kind: 'door' | 'open' }[];
+  photoIndexes: number[];
+};
+
 export interface PhotoLayout {
   floorplanPhotoIndex: number | null;
-  rooms: { label: string; type: z.infer<typeof RoomType>; areaM2: number; level: number; side: 'front' | 'rear' | 'unknown'; photoIndexes: number[] }[];
+  rooms: LayoutRoom[];
+  hallway: boolean | null;
+  aspect: number | null;
   notes: string[];
   provenance: Provenance;
 }
@@ -212,10 +242,21 @@ export async function layoutFromPhotos(opts: {
   facts: { bedrooms: number | null; bathrooms?: number | null; areaSqM: number | null; propertyType?: string | null; description?: string | null; address: string };
 }): Promise<PhotoLayout> {
   const f = opts.facts;
-  const { data, model } = await museJson<Omit<PhotoLayout, 'provenance'> & { floors: number }>({
+  const { data, model } = await museJson<{ floorplanPhotoIndex: number | null; floors: number; hallway: boolean | null; footprintAspect: number | null; rooms: LayoutRoom[]; notes: string[] }>({
     budget: opts.budget,
-    system:
-      'You help reconstruct a home from a property listing that has no separate floor plan. First, if any photo IS a floor plan drawing, return its index as floorplanPhotoIndex. Otherwise return null and list every room you believe the home has: type, a short label, a realistic area in square metres, which floor (0 = ground/entry level), whether it is at the front (street side) or rear (garden side) of the home when the description, label or view tells you (else "unknown"), and the indexes of photos that show it. Use the listing facts (bedroom count, area) as ground truth for counts and total size. Include halls/landings only if visible. Do not invent extra rooms beyond what the facts and photos support.',
+    system: `You reconstruct the layout of a home from listing photos when there is no floor plan. Be a careful surveyor: only report what the photos show.
+First, if any photo IS a floor plan drawing, return its index as floorplanPhotoIndex and stop. Otherwise return null and describe the home:
+- rooms: every room the home has (use the listing facts for bedroom/bathroom counts and total area). Several photos of one room are ONE room.
+- label: short and distinct ("Living room", "Bedroom 1"). type, level (0 = entry floor).
+- widthM/depthM: interior size estimated from objects of known size (double bed ~1.4x2.0 m, interior door ~0.8x2.0 m, dining chair seat ~0.45 m, floor tiles ~0.3-0.45 m); null if not visible.
+- side: which side of the home the room is on — front = the street/entrance side (exterior photos show the facade, front door, porch), rear = the yard/patio side, left/right seen facing the front; "unknown" when you can't tell.
+- entrance: true for the room the front door opens into (a front door with glass panel seen from inside counts).
+- exteriorWalls: how many of the room's walls have windows or outside doors (2 = a corner room); null if unknown.
+- connectsTo: rooms visible THROUGH a doorway or opening in this room's photos. kind "open" when there is no wall between them (open-plan living/dining, kitchen counter opening), "door" for a normal doorway. Only list connections you can see or that the description states.
+- hallway: true if a corridor/hall is visible, false if rooms clearly open straight into each other, null if unknown.
+- footprintAspect: width of the front facade divided by the depth of the home, from exterior photos; null if unknown.
+- photoIndexes: photos that show the room.
+Put anything uncertain in notes.`,
     text: `Listing: ${f.address}. Facts: ${f.bedrooms ?? '?'} bedrooms, ${f.bathrooms ?? '?'} bathrooms, ${f.areaSqM ? `${f.areaSqM} m²` : 'area unknown'}, type: ${f.propertyType ?? 'unknown'}.\nDescription: ${(f.description ?? '').slice(0, 1200)}\n${opts.photos.length} photos follow, numbered from 0.`,
     images: opts.photos,
     schemaName: 'layout_from_photos',
@@ -223,11 +264,22 @@ export async function layoutFromPhotos(opts: {
     effort: 'medium',
   });
   const n = opts.photos.length;
+  const sane = (v: number | null, lo: number, hi: number) => (v != null && v >= lo && v <= hi ? v : null);
   return {
     floorplanPhotoIndex: data.floorplanPhotoIndex != null && data.floorplanPhotoIndex >= 0 && data.floorplanPhotoIndex < n ? data.floorplanPhotoIndex : null,
+    hallway: data.hallway ?? null,
+    aspect: sane(data.footprintAspect, 0.4, 3),
     rooms: data.rooms
       .filter((r) => r.areaM2 > 0.5 && r.areaM2 < 200)
-      .map((r) => ({ ...r, level: Math.max(0, Math.min(3, r.level)), photoIndexes: r.photoIndexes.filter((i) => i >= 0 && i < n) })),
+      .map((r) => ({
+        ...r,
+        widthM: sane(r.widthM, 0.8, 20),
+        depthM: sane(r.depthM, 0.8, 20),
+        exteriorWalls: r.exteriorWalls != null ? Math.max(0, Math.min(3, Math.round(r.exteriorWalls))) : null,
+        connectsTo: (r.connectsTo ?? []).filter((c) => c.label && c.label !== r.label).slice(0, 6),
+        level: Math.max(0, Math.min(3, r.level)),
+        photoIndexes: r.photoIndexes.filter((i) => i >= 0 && i < n),
+      })),
     notes: data.notes.slice(0, 6),
     provenance: provenance(model, PROMPT_VERSIONS.layoutFromPhotos),
   };

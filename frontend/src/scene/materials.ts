@@ -6,7 +6,7 @@
  * meshes without stretching.
  */
 import { CanvasTexture, Color, MeshStandardMaterial, RepeatWrapping, SRGBColorSpace, type Texture } from '@iwsdk/core';
-import type { RoomSurfaces, RoomType, SurfaceMaterial, SurfaceSpec } from '../shared/index.js';
+import type { ExteriorFinish, RoomSurfaces, RoomType, SurfaceMaterial, SurfaceSpec } from '../shared/index.js';
 
 const SIZE = 512;
 
@@ -222,10 +222,18 @@ export function surfaceMaterial(kind: 'floor' | 'wall', type: RoomType, src: Mat
 }
 
 let exterior: MeshStandardMaterial | null = null;
-export function exteriorMaterial(): MeshStandardMaterial {
+/** Outside walls: the finish chosen on the review screen, else generic brick. */
+export function exteriorMaterial(finish?: ExteriorFinish | null): MeshStandardMaterial {
+  if (finish) {
+    const kind: SurfaceMaterial | 'brick' = finish.wall === 'brick' ? 'brick' : finish.wall === 'stone' ? 'stone' : finish.wall === 'siding' ? 'wood' : 'concrete';
+    const key = `${kind}:${finish.wallColor}`;
+    exteriorByKey[key] ??= new MeshStandardMaterial({ map: proceduralCached(kind, finish.wallColor).tex, roughness: 0.95 });
+    return exteriorByKey[key];
+  }
   exterior ??= new MeshStandardMaterial({ map: proceduralCached('brick', '#a9604a').tex, roughness: 0.9 });
   return exterior;
 }
+const exteriorByKey: Record<string, MeshStandardMaterial> = {};
 
 let ceiling: MeshStandardMaterial | null = null;
 export function ceilingMaterial(): MeshStandardMaterial {

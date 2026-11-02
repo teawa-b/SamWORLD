@@ -16,7 +16,7 @@ import {
   bounds,
   buildStructure,
   layoutFromRoomList,
-  roomListFromFacts,
+  roomListFromEvidence,
   typicalFurniture,
   objectFootprint,
   objectSpan,
@@ -142,7 +142,8 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   const photoData = await Promise.all(photos.slice(0, 50).map(async (m) => ({ media: m, buf: flattenTransparentPng(await readMedia(m)) })));
   let interp = opts.forceReparse ? undefined : store.get('interpretations', property.id);
   // Estimated layouts are cheap to redo: drop ones made by an older prompt, or without AI now that it's on.
-  if (interp && ((interp.layoutSource === 'photos' && interp.provenance.promptVersion !== PROMPT_VERSIONS.layoutFromPhotos) || (interp.layoutSource === 'listing-details' && live))) interp = undefined;
+  // Layouts estimated without AI are always redone (cheap, and the person's room hints may have changed).
+  if (interp && ((interp.layoutSource === 'photos' && interp.provenance.promptVersion !== PROMPT_VERSIONS.layoutFromPhotos) || (interp.layoutSource === 'listing-details' && live) || (interp.layoutSource !== 'floorplan' && interp.layoutSource !== 'photo-floorplan' && interp.provenance.method === 'deterministic'))) interp = undefined;
   if (interp) {
     await ctx.log('parse', `Reusing cached layout (${interp.layoutSource}, ${interp.provenance.method}); no AI call`);
   } else if (live && planImages.length) {
@@ -151,6 +152,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     interp = FloorplanInterpretation.parse(fixtureFile(property.sourceListingId, 'interpretation.fixture.json'));
     await ctx.log('parse', live ? 'No raster plan available for Muse; using the fixture reference interpretation' : 'Using the fixture reference interpretation (hand-authored stand-in for Muse Spark)', 'warn');
   } else {
+    const hints = property.roomHints ?? [];
     const facts = { bedrooms: property.bedrooms, bathrooms: property.bathrooms ?? null, floors: property.floors ?? null, areaSqM: property.areaSqM, propertyType: property.status, description: property.description ?? null, address: property.address };
     if (plans.length && !live) await ctx.log('parse', 'The floor plan can’t be read automatically without MODEL_API_KEY. Trace it in the plan editor (free, no AI) for a plan-accurate model; estimating the layout for now', 'warn');
     else if (!plans.length) await ctx.log('parse', 'No floor plan in this listing; estimating the layout', 'warn');
@@ -164,19 +166,40 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
         planImages = await loadPlanRasters([{ ...m, type: 'floorplan' }]);
         interp = { ...(await parseWithMuse(ctx, planImages, property.areaSqM, config.meta.museModel)), layoutSource: 'photo-floorplan' };
       } else if (r.rooms.length) {
-        await ctx.log('parse', `Muse inferred ${r.rooms.length} rooms from ${sample.length} photos; arranging an estimated layout`);
-        interp = layoutFromRoomList({ rooms: r.rooms, statedTotalAreaSqM: property.areaSqM, provenance: r.provenance, uncertainties: r.notes, confidence: 0.45, layoutSource: 'photos' });
+        // The person's own room hints override Muse's reading of the same room.
+        const rooms = r.rooms.map((room) => {
+          const h = hints.find((x) => x.label.trim().toLowerCase() === room.label.trim().toLowerCase());
+          return h ? { ...room, ...Object.fromEntries(Object.entries(h).filter(([k, v]) => k !== 'label' && v != null && !(Array.isArray(v) && !v.length))) } : room;
+        });
+        const links = rooms.reduce((a, x) => a + (x.connectsTo?.length ?? 0), 0);
+        await ctx.log('parse', `Muse read ${rooms.length} rooms and ${links} room connections from ${sample.length} photos; arranging them to fit`);
+        interp = layoutFromRoomList({ rooms, hints: { hallway: property.hallway ?? r.hallway, aspect: r.aspect }, statedTotalAreaSqM: property.areaSqM, provenance: r.provenance, uncertainties: r.notes, confidence: 0.45, layoutSource: 'photos' });
       }
     }
     if (!interp) {
+      // Rooms the person labelled on the review screen + rooms the facts imply, arranged to fit their hints.
+      const labels = [...new Set(photos.map((m) => m.roomGuess?.trim()).filter((l): l is string => !!l))];
+      const fromEvidence = labels.length || hints.length;
+      const links = hints.reduce((a, h) => a + (h.connectsTo?.length ?? 0), 0);
       interp = layoutFromRoomList({
-        rooms: roomListFromFacts(facts),
+        rooms: roomListFromEvidence(facts, labels, hints),
+        hints: { hallway: property.hallway ?? null },
         statedTotalAreaSqM: property.areaSqM,
-        provenance: { method: 'deterministic', note: 'Estimated from listing details (bedrooms, area); no floor plan or AI room reading', at: now() },
-        confidence: 0.3,
-        layoutSource: 'listing-details',
+        provenance: {
+          method: 'deterministic',
+          note: fromEvidence ? 'Arranged from the room labels and room relationships entered on the review screen, plus the listing details; no floor plan' : 'Estimated from listing details (bedrooms, area); no floor plan or AI room reading',
+          at: now(),
+        },
+        confidence: fromEvidence ? 0.4 : 0.3,
+        layoutSource: fromEvidence ? 'photos' : 'listing-details',
       });
-      await ctx.log('parse', `Estimated a layout from the listing details (${property.bedrooms ?? '?'} bedrooms, ${property.areaSqM ? `${property.areaSqM} m²` : 'area unknown'})`, 'warn');
+      await ctx.log(
+        'parse',
+        fromEvidence
+          ? `Arranged ${interp.levels[0].rooms.length} rooms from your ${labels.length} photo labels and ${links} room connection(s) (no floor plan, no AI)`
+          : `Estimated a layout from the listing details (${property.bedrooms ?? '?'} bedrooms, ${property.areaSqM ? `${property.areaSqM} m²` : 'area unknown'})`,
+        'warn',
+      );
     }
   }
   // Remap fixture plan media ids onto this property's media ids.

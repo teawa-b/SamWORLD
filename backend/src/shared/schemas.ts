@@ -47,6 +47,25 @@ export const UsageRightsStatus = z.enum([
   'unverified', // must not be shown publicly or sent to a model
 ]);
 
+export const ExteriorFinish = z.object({
+  wall: z.enum(['stucco', 'brick', 'siding', 'stone', 'render']),
+  wallColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  roof: z.enum(['clay-tile', 'shingle', 'slate', 'metal', 'flat']),
+  roofColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+});
+export type ExteriorFinish = z.infer<typeof ExteriorFinish>;
+
+export const RoomHint = z.object({
+  label: z.string().min(1).max(60),
+  side: z.enum(['front', 'rear', 'left', 'right', 'unknown']).optional(),
+  entrance: z.boolean().optional(),
+  exteriorWalls: z.number().int().min(0).max(3).nullable().optional(),
+  widthM: z.number().positive().max(30).nullable().optional(),
+  depthM: z.number().positive().max(30).nullable().optional(),
+  connectsTo: z.array(z.object({ label: z.string().min(1).max(60), kind: z.enum(['door', 'open']) })).max(10).optional(),
+});
+export type RoomHint = z.infer<typeof RoomHint>;
+
 export const Property = z.object({
   id: z.string(),
   sourceProvider: z.string(),
@@ -60,6 +79,11 @@ export const Property = z.object({
   /** Optional: not every source gives these. Used for estimated layouts. */
   bathrooms: z.number().nullable().optional(),
   floors: z.number().int().min(1).max(6).nullable().optional(),
+  /** What the photos show about how rooms fit together (entered on the review screen or read by Muse). */
+  roomHints: z.array(z.lazy(() => RoomHint)).max(30).optional(),
+  hallway: z.boolean().nullable().optional(),
+  /** Outside finish seen in exterior photos (set on the review screen). Default: generic brick + tiled roof. */
+  exterior: z.lazy(() => ExteriorFinish).optional(),
   areaSqM: z.number().nullable(),
   areaEvidence: z.string().nullable(),
   /** Listing text, when the source provides it (used as context for estimated layouts). */

@@ -2,12 +2,19 @@
  * Screen 1 (Import) and Screen 2 (Review media). Everything here talks to the
  * backend import API; the same API is what a future browser extension posts to.
  */
-import type { Property, PropertyMedia, FloorplanInterpretation } from '../shared/index.js';
+import { typeFromLabel, type Property, type PropertyMedia, type FloorplanInterpretation, type RoomHint } from '../shared/index.js';
 import { api, ApiError, mediaUrl, staticMode, type Capabilities, type Extraction } from '../api.js';
 import { icon } from './icons.js';
 
 export const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+const EXTERIOR_PRESETS: Record<string, { name: string; finish: NonNullable<Property['exterior']> }> = {
+  florida: { name: 'Florida stucco, clay tile roof', finish: { wall: 'stucco', wallColor: '#e8a36a', roof: 'clay-tile', roofColor: '#b5532f' } },
+  white: { name: 'White render, grey roof', finish: { wall: 'render', wallColor: '#f2f0ea', roof: 'slate', roofColor: '#4d535a' } },
+  redbrick: { name: 'Red brick, dark tile roof', finish: { wall: 'brick', wallColor: '#a9604a', roof: 'clay-tile', roofColor: '#5a3a30' } },
+  siding: { name: 'Painted siding, shingle roof', finish: { wall: 'siding', wallColor: '#c9d3d8', roof: 'shingle', roofColor: '#3e3e40' } },
+};
 
 const ROOM_LABELS = ['Living room', 'Kitchen', 'Dining room', 'Bedroom 1', 'Bedroom 2', 'Bedroom 3', 'Bathroom', 'En-suite', 'WC', 'Hallway', 'Landing', 'Study', 'Utility', 'Exterior'];
 
@@ -152,10 +159,88 @@ export class ImportFlow {
       <div class="mgrid">${plans.map(card).join('') || '<div class="empty xs">None yet. Change an image’s type to “Floor plan”.</div>'}</div>
       ${groupKeys.map((k) => `<h3>${k ? esc(k) : 'Not labelled yet'} <span class="faint">${groups.get(k)!.length}</span></h3><div class="mgrid">${groups.get(k)!.map(card).join('')}</div>`).join('') || '<h3>Photos</h3><div class="empty">No photos yet.</div>'}
       <p class="xs faint">Photos with the same room label are treated as views of one room. Labels are hints: on the Rooms tab you can reassign any photo after the build.</p>
+      ${!plans.length ? this.renderHints(groupKeys.filter((k) => k && typeFromLabel(k))) : ''}
+      ${this.renderExterior()}
       <div class="sticky-cta">
         <button class="btn primary block" data-action="generate" ${included.length ? '' : 'disabled'}>${icon('cube')}Generate 3D</button>
         <p class="xs faint" style="text-align:center;margin:6px 0 0">${included.length} of ${this.media.length} images will be used · ${caps?.liveMeta ? `Meta ${esc(caps.museModel)} + ${esc(caps.samModel)}` : 'no AI (demo mode)'}</p>
       </div>`;
+  }
+
+  /** Without a floor plan: what the photos show about how the rooms fit together. */
+  private renderHints(labels: string[]): string {
+    const p = this.property!;
+    if (!labels.length) return `<div class="callout info">${icon('info')}<div>Label the photos by room (Kitchen, Living room, Bedroom 1…) and you can say how the rooms fit together, so the layout follows the real house.</div></div>`;
+    const hint = (l: string): RoomHint => p.roomHints?.find((h) => h.label.toLowerCase() === l.toLowerCase()) ?? { label: l };
+    const linkOf = (a: string, b: string) => hint(a).connectsTo?.find((c) => c.label.toLowerCase() === b.toLowerCase())?.kind ?? hint(b).connectsTo?.find((c) => c.label.toLowerCase() === a.toLowerCase())?.kind ?? null;
+    const sides = ['unknown', 'front', 'rear', 'left', 'right'];
+    return `
+      <h3>How the rooms fit together</h3>
+      <p class="xs muted">No floor plan, so WalkIn arranges the rooms from what the photos show. Anything you set here is respected; leave what you can't tell. ${this.host.caps()?.liveMeta ? 'Muse also reads this from the photos; your answers win.' : ''}</p>
+      <label class="xs muted hint-hall">Hallway between rooms?
+        <select class="field small" data-hint-hall>
+          <option value="" ${p.hallway == null ? 'selected' : ''}>Not sure</option>
+          <option value="yes" ${p.hallway === true ? 'selected' : ''}>Yes, there is a hallway</option>
+          <option value="no" ${p.hallway === false ? 'selected' : ''}>No, rooms open into each other</option>
+        </select></label>
+      <div class="hints">${labels
+        .map((l) => {
+          const h = hint(l);
+          const others = labels.filter((o) => o !== l);
+          return `<div class="hint-row card">
+            <b>${esc(l)}</b>
+            <div class="hint-ctl">
+              <select class="field small" data-hint-side="${esc(l)}" aria-label="Side of the house">${sides.map((x) => `<option value="${x}" ${(h.side ?? 'unknown') === x ? 'selected' : ''}>${x === 'unknown' ? 'Side: not sure' : `${x[0].toUpperCase()}${x.slice(1)} of house`}</option>`).join('')}</select>
+              <label class="mini-switch"><input type="checkbox" data-hint-entrance="${esc(l)}" ${h.entrance ? 'checked' : ''} />Front door here</label>
+              <label class="mini-switch"><input type="checkbox" data-hint-corner="${esc(l)}" ${(h.exteriorWalls ?? 0) >= 2 ? 'checked' : ''} />Corner (windows on 2 walls)</label>
+            </div>
+            ${others.length ? `<div class="hint-links"><span class="xs muted">Opens into:</span>${others.map((o) => { const k = linkOf(l, o); return `<button class="chip ${k ? 'on' : ''}" data-action="hint-link" data-a="${esc(l)}" data-b="${esc(o)}" title="Click: door → open-plan → none">${esc(o)}${k ? ` <span class="faint">${k === 'open' ? 'open-plan' : 'door'}</span>` : ''}</button>`; }).join('')}</div>` : ''}
+          </div>`;
+        })
+        .join('')}</div>`;
+  }
+
+  /** Outside walls and roof as seen in the exterior photos. */
+  private renderExterior(): string {
+    const e = this.property!.exterior;
+    const opt = (v: string, cur: string | undefined, label: string) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
+    return `
+      <h3>Outside of the house</h3>
+      <p class="xs muted">Pick what the exterior photos show. Without this the model uses generic brick.</p>
+      <div class="ext-row">
+        <select class="field small" data-ext-preset aria-label="Preset">
+          <option value="">Presets…</option>
+          ${Object.entries(EXTERIOR_PRESETS).map(([k, p]) => `<option value="${k}">${esc(p.name)}</option>`).join('')}
+        </select>
+        <select class="field small" data-ext="wall" aria-label="Wall finish">${opt('stucco', e?.wall, 'Stucco')}${opt('render', e?.wall, 'Smooth render')}${opt('brick', e?.wall, 'Brick')}${opt('siding', e?.wall, 'Siding')}${opt('stone', e?.wall, 'Stone')}</select>
+        <input type="color" data-ext="wallColor" value="${e?.wallColor ?? '#a9604a'}" aria-label="Wall colour" />
+        <select class="field small" data-ext="roof" aria-label="Roof">${opt('clay-tile', e?.roof, 'Clay tile')}${opt('shingle', e?.roof, 'Shingle')}${opt('slate', e?.roof, 'Slate')}${opt('metal', e?.roof, 'Metal')}${opt('flat', e?.roof, 'Flat')}</select>
+        <input type="color" data-ext="roofColor" value="${e?.roofColor ?? '#7a4b3a'}" aria-label="Roof colour" />
+      </div>`;
+  }
+
+  private async saveExterior(el: HTMLInputElement) {
+    if (!this.property) return;
+    const cur = this.property.exterior ?? { wall: 'brick' as const, wallColor: '#a9604a', roof: 'clay-tile' as const, roofColor: '#7a4b3a' };
+    const next = el.dataset.extPreset !== undefined ? (EXTERIOR_PRESETS[el.value]?.finish ?? null) : { ...cur, [el.dataset.ext!]: el.value };
+    if (!next) return;
+    this.property = (await api.updateProperty(this.property.id, { exterior: next as Property['exterior'] })).property;
+    this.host.rerender();
+  }
+
+  private async saveHints(mutate: (hints: RoomHint[]) => void, hallway?: boolean | null) {
+    if (!this.property) return;
+    const hints: RoomHint[] = structuredClone(this.property.roomHints ?? []);
+    mutate(hints);
+    const clean = hints.filter((h) => (h.side && h.side !== 'unknown') || h.entrance || h.exteriorWalls || h.connectsTo?.length);
+    this.property = (await api.updateProperty(this.property.id, { roomHints: clean, ...(hallway !== undefined ? { hallway } : {}) })).property;
+    this.host.rerender();
+  }
+
+  private hintFor(hints: RoomHint[], label: string): RoomHint {
+    let h = hints.find((x) => x.label.toLowerCase() === label.toLowerCase());
+    if (!h) hints.push((h = { label }));
+    return h;
   }
 
   // ------------------------------------------------------------ data
@@ -309,6 +394,21 @@ export class ImportFlow {
         }
         this.host.openPlanEditor(pid);
         return true;
+      case 'hint-link': {
+        // Cycle: none → door → open-plan → none. Stored once, on the first room.
+        const a = el.dataset.a!;
+        const b = el.dataset.b!;
+        await this.saveHints((hs) => {
+          const ha = this.hintFor(hs, a);
+          const hb = this.hintFor(hs, b);
+          const cur = ha.connectsTo?.find((c) => c.label.toLowerCase() === b.toLowerCase())?.kind ?? hb.connectsTo?.find((c) => c.label.toLowerCase() === a.toLowerCase())?.kind ?? null;
+          ha.connectsTo = (ha.connectsTo ?? []).filter((c) => c.label.toLowerCase() !== b.toLowerCase());
+          hb.connectsTo = (hb.connectsTo ?? []).filter((c) => c.label.toLowerCase() !== a.toLowerCase());
+          const next = cur == null ? 'door' : cur === 'door' ? 'open' : null;
+          if (next) ha.connectsTo.push({ label: b, kind: next });
+        });
+        return true;
+      }
       case 'generate':
         await this.saveFacts();
         await this.host.startBuild(pid);
@@ -326,6 +426,17 @@ export class ImportFlow {
     else if (el.dataset.mediaInclude) await this.patch(el.dataset.mediaInclude, { excluded: !el.checked });
     else if (el.dataset.mediaType) await this.patch(el.dataset.mediaType, { type: el.value as 'photo' | 'floorplan' });
     else if (el.dataset.mediaRoom) await this.patch(el.dataset.mediaRoom, { roomGuess: el.value.trim() || null }, true);
+    else if (el.dataset.ext || el.dataset.extPreset !== undefined) await this.saveExterior(el);
+    else if (el.dataset.hintSide) await this.saveHints((hs) => (this.hintFor(hs, el.dataset.hintSide!).side = el.value as RoomHint['side']));
+    else if (el.dataset.hintEntrance) {
+      const l = el.dataset.hintEntrance;
+      // Only one room has the front door.
+      await this.saveHints((hs) => {
+        for (const h of hs) h.entrance = false;
+        this.hintFor(hs, l).entrance = el.checked;
+      });
+    } else if (el.dataset.hintCorner) await this.saveHints((hs) => (this.hintFor(hs, el.dataset.hintCorner!).exteriorWalls = el.checked ? 2 : null));
+    else if (el.hasAttribute('data-hint-hall')) await this.saveHints(() => undefined, el.value === 'yes' ? true : el.value === 'no' ? false : null);
     else if (['prop-title', 'prop-beds', 'prop-baths', 'prop-floors', 'prop-area'].includes(el.id)) await this.saveFacts();
   }
 
