@@ -31,7 +31,7 @@ const MAX_SIDE = 2048;
 const ZCELL = 2; // camera pixels per depth-buffer cell
 const OCCLUSION = 0.12; // metres in front of the surface that count as something blocking it
 const AGREE = 40; // second pass: a frame's colour must be within this (per channel, 0–255) of the first-pass average
-const SPECK = 60; // dark specks smaller than this many texels (about 8 × 8 cm) are dropped
+const SPECK = 12; // dark groups that fit in a box this many texels (cm) across are specks; longer shapes are details
 export const PHOTO_WALLS_VERSION = 'photo-walls-v2';
 /** Surfaces with at least this share unseen get Muse Image's fill. */
 const INPAINT_FROM = 0.08;
@@ -256,8 +256,8 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
 
 /**
  * Small dark specks on a lighter surface (a stray frame's edge of furniture, a hole in the cloud) are
- * marked unseen: texels clearly darker than their 9 × 9 neighbourhood, in connected groups smaller than
- * SPECK texels. Real thin details (a picture frame, a door edge) form long connected shapes and stay.
+ * marked unseen: texels clearly darker than their 9 × 9 neighbourhood, in connected groups that fit within
+ * SPECK × SPECK texels. Real thin details (a picture frame, a door edge) form long shapes and stay.
  */
 export function dropSpecks(col: Float32Array, has: Uint8Array, w: number, h: number) {
   const L = new Float32Array(w * h);
@@ -286,8 +286,11 @@ export function dropSpecks(col: Float32Array, has: Uint8Array, w: number, h: num
     if (!dark[t0] || seenGroup[t0]) continue;
     const group = [t0];
     seenGroup[t0] = 1;
-    for (let i = 0; i < group.length && group.length < SPECK; i++) {
+    let gx0 = t0 % w, gx1 = gx0, gy0 = (t0 - gx0) / w, gy1 = gy0;
+    for (let i = 0; i < group.length; i++) {
       const t = group[i], x = t % w, y = (t - x) / w;
+      gx0 = Math.min(gx0, x), gx1 = Math.max(gx1, x), gy0 = Math.min(gy0, y), gy1 = Math.max(gy1, y);
+      if (gx1 - gx0 >= SPECK || gy1 - gy0 >= SPECK) break; // too long to be a speck
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const xx = x + dx, yy = y + dy;
         if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
@@ -295,7 +298,7 @@ export function dropSpecks(col: Float32Array, has: Uint8Array, w: number, h: num
         if (dark[q] && !seenGroup[q]) (seenGroup[q] = 1), group.push(q);
       }
     }
-    if (group.length < SPECK) for (const t of group) has[t] = 0;
+    if (gx1 - gx0 < SPECK && gy1 - gy0 < SPECK) for (const t of group) has[t] = 0;
   }
 }
 
