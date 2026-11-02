@@ -124,7 +124,7 @@ export interface Scan {
   objects?: ScanObject[];
   objectsStatus?: { state: 'running' | 'done' | 'failed' | 'skipped'; message: string; usage: string; models?: string[] };
   /** The video projected onto the floor, ceiling and walls (photo-walls.ts), served at /api/scans/:id/walls/:file. */
-  photoWalls?: { id: string; file: string; width: number; height: number; seen: number; filled?: 'muse-image' | 'smooth' | 'none' }[];
+  photoWalls?: { id: string; file: string; width: number; height: number; seen: number; filled?: 'muse-image' | 'smooth' | 'none'; fillError?: string }[];
 }
 
 export interface ScanObject {

@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
+import sharp from 'sharp';
 import { config, metaConfigured } from './config.js';
 import { AiBudget } from './meta/client.js';
 import { inpaintSurface } from './meta/image.js';
@@ -46,8 +47,9 @@ export interface PhotoWall {
   height: number;
   /** Share of texels some frame saw (the rest is filled in). */
   seen: number;
-  /** How the unseen part was filled. */
+  /** How the unseen part was filled, and why Muse Image wasn't used when it was asked. */
   filled: 'muse-image' | 'smooth' | 'none';
+  fillError?: string;
 }
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
@@ -201,6 +203,7 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
     const plane = G.plane;
     jobs.push(async () => {
       let filled: PhotoWall['filled'] = unseen > 0 ? 'smooth' : 'none';
+      let fillError: string | undefined;
       if (inpaint && unseen >= INPAINT_FROM) {
         try {
           const gen = await museFill(scan.id, plane.id, col, seenMask, tw, th, plane.surface === 'walls' ? 'wall' : plane.surface, inpaint);
@@ -208,8 +211,9 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
             composite(col, gen, seenMask, tw, th);
             filled = 'muse-image';
           }
-        } catch {
-          // Keep the smooth fill.
+        } catch (e) {
+          // Keep the smooth fill; say why on the record.
+          fillError = (e as Error).message.slice(0, 200);
         }
       }
       const data = Buffer.alloc(tw * th * 4);
@@ -219,7 +223,7 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
       }
       const file = `${plane.id}.jpg`;
       await writeFile(join(scanDir(scan.id), 'walls', file), jpeg.encode({ data, width: tw, height: th }, 85).data);
-      out.push({ id: plane.id, file, width: tw, height: th, seen: Math.round((100 * seen) / wsum.length) / 100, filled });
+      out.push({ id: plane.id, file, width: tw, height: th, seen: Math.round((100 * seen) / wsum.length) / 100, filled, ...(fillError ? { fillError } : {}) });
     });
   }
   // Muse Image calls in parallel, four at a time.
@@ -249,7 +253,7 @@ async function museFill(scanId: string, planeId: string, col: Float32Array, seen
   const answer = existsSync(cacheFile) ? await readFile(cacheFile) : await inpaint(marked, surface);
   if (!answer) return null;
   if (!existsSync(cacheFile)) await writeFile(cacheFile, answer);
-  const img = answer[0] === 0x89 ? PNG.sync.read(answer) : jpeg.decode(answer, { useTArray: true, formatAsRGBA: true });
+  const img = await decodeImage(answer);
   // Resize to the surface (bilinear).
   const out = new Float32Array(w * h * 3);
   for (let y = 0; y < h; y++)
@@ -263,6 +267,14 @@ async function museFill(scanId: string, planeId: string, col: Float32Array, seen
       }
     }
   return out;
+}
+
+/** RGBA pixels of a PNG, JPEG or WebP (Muse Image answers in WebP). */
+export async function decodeImage(buf: Buffer): Promise<{ data: Uint8Array; width: number; height: number }> {
+  if (buf[0] === 0x89 && buf[1] === 0x50) return PNG.sync.read(buf);
+  if (buf[0] === 0xff && buf[1] === 0xd8) return jpeg.decode(buf, { useTArray: true, formatAsRGBA: true });
+  const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  return { data, width: info.width, height: info.height };
 }
 
 /**
