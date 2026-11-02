@@ -9,7 +9,7 @@
  * the end of the hall. Positions are NOT the real layout and are flagged as
  * estimated everywhere downstream.
  */
-import type { FloorplanInterpretation, PlanLevel, PlanOpening, PlanRoom, Provenance, RoomType } from './schemas.js';
+import type { FloorplanInterpretation, PlanLevel, PlanOpening, PlanRoom, Provenance, RoomType, Vec2 } from './schemas.js';
 import { solveSingleStoreyLayout } from './solver.js';
 
 export interface RoomSpec {
@@ -137,6 +137,8 @@ export function layoutFromRoomList(input: {
   confidence: number;
   layoutSource?: 'photos' | 'listing-details';
   hints?: LayoutHints;
+  /** Real building outline in metres (front at max z), used for single-storey homes. */
+  footprint?: Vec2[] | null;
 }): FloorplanInterpretation {
   // Single storey: arrange by the photo evidence (see solver.ts). Multi-storey keeps the corridor plan below.
   if (input.rooms.length && input.rooms.every((r) => r.level === 0)) {

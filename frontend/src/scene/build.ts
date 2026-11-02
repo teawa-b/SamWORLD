@@ -29,6 +29,7 @@ import {
 import {
   SLAB_THICKNESS_M,
   WALL_THICKNESS_M,
+  bounds,
   computeViewpoints,
   pointInPolygon,
   wallPieces,
@@ -249,7 +250,23 @@ export function buildHouse(scene: SceneManifest, opts: BuildOptions): HouseBuild
   const top = [...s.levels].sort((a, b) => b.index - a.index)[0];
   const topElevation = top.elevationMeters + top.heightMeters;
   const topRooms = s.rooms.filter((r) => r.levelId === top.id).flatMap((r) => r.polygonXZMeters);
-  if (topRooms.length) {
+  // A non-rectangular real outline (OpenStreetMap) gets a roof that follows it, not a gable over the bounding box.
+  const outline = scene.property.useFootprint !== false && s.levels.length === 1 ? scene.property.footprint?.polygonM : null;
+  const bb = topRooms.length ? bounds(topRooms) : null;
+  const shaped = outline && bb && ringAreaXZ(outline) < 0.93 * (bb.max[0] - bb.min[0]) * (bb.max[1] - bb.min[1]);
+  if (topRooms.length && shaped) {
+    const shape = new Shape(outline.map(([x, z]) => new Vector2(x, -z)));
+    const geo = new ExtrudeGeometry(shape, { depth: 0.25, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.35, bevelSegments: 1 });
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, topElevation + 0.02, 0);
+    roof = new Group();
+    roof.name = 'Roof';
+    roof.userData = { kind: 'roof', estimated: true, followsOutline: true };
+    roof.add(new Mesh(geo, mats.roof));
+    if (scene.property.exterior) (mats.roof as MeshStandardMaterial).color.set(scene.property.exterior.roofColor);
+    else (mats.roof as MeshStandardMaterial).color.set(0x7a4b3a);
+    shell.add(roof);
+  } else if (topRooms.length) {
     roof = buildRoof(topRooms, topElevation);
     // Roof colour from the review screen (flat roofs stay pitched geometry for now, but take the colour).
     if (scene.property.exterior) (mats.roof as MeshStandardMaterial).color.set(scene.property.exterior.roofColor);
@@ -308,6 +325,12 @@ function buildStairs(poly: Vec2[], fromY: number, toY: number): Group {
   }
   g.add(new Mesh(mergeAll(geos)!, mats.stair));
   return g;
+}
+
+function ringAreaXZ(p: Vec2[]): number {
+  let a = 0;
+  for (let i = 0; i < p.length; i++) a += p[i][0] * p[(i + 1) % p.length][1] - p[(i + 1) % p.length][0] * p[i][1];
+  return Math.abs(a) / 2;
 }
 
 function buildRoof(points: Vec2[], eaveY: number): Group {

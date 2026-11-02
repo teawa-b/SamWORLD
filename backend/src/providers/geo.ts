@@ -13,7 +13,7 @@ async function nominatim<T>(path: string): Promise<T> {
   const wait = last + 1100 - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   last = Date.now();
-  const res = await fetch(`https://nominatim.openstreetmap.org${path}`, { headers: { 'user-agent': UA, accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+  const res = await fetch(`${process.env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org'}${path}`, { headers: { 'user-agent': UA, accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Geocoder error ${res.status}`);
   const value = (await res.json()) as T;
   cache.set(path, { at: Date.now(), value });

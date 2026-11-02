@@ -164,8 +164,13 @@ export async function registerImportRoutes(app: FastifyInstance) {
 
   app.patch('/api/properties/:propertyId', async (req) => {
     const property = requireProperty((req.params as { propertyId: string }).propertyId);
-    const p = parse(z.object({ address: z.string().min(1).max(200).optional(), bedrooms: z.number().int().min(0).max(30).nullable().optional(), bathrooms: z.number().min(0).max(20).nullable().optional(), floors: z.number().int().min(1).max(6).nullable().optional(), roomHints: z.array(RoomHint).max(30).optional(), hallway: z.boolean().nullable().optional(), exterior: ExteriorFinish.optional(), areaSqM: z.number().positive().max(5000).nullable().optional() }), req.body);
+    const p = parse(z.object({ address: z.string().min(1).max(200).optional(), bedrooms: z.number().int().min(0).max(30).nullable().optional(), bathrooms: z.number().min(0).max(20).nullable().optional(), floors: z.number().int().min(1).max(6).nullable().optional(), roomHints: z.array(RoomHint).max(30).optional(), hallway: z.boolean().nullable().optional(), exterior: ExteriorFinish.optional(), useFootprint: z.boolean().optional(), areaSqM: z.number().positive().max(5000).nullable().optional() }), req.body);
     const next = { ...property, ...Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)), updatedAt: now() };
+    // A new address on an uploaded property means a new location: look the building outline up again.
+    if (p.address && p.address !== property.address && (property.sourceProvider === 'upload' || property.sourceProvider === 'listing-url')) {
+      next.location = null;
+      delete next.footprint;
+    }
     await store.put('properties', property.id, next);
     return { property: next };
   });

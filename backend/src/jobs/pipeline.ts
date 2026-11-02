@@ -33,6 +33,7 @@ import {
   type StepLog,
   type Structure,
   type VerificationReport,
+  type Vec2,
 } from '../shared/index.js';
 import { config, metaConfigured } from '../config.js';
 import { flattenTransparentPng, imageSize, MODEL_IMAGE_TYPES, toDataUrl } from '../lib/image.js';
@@ -43,6 +44,8 @@ import { segmentConcept } from '../meta/sam.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
 import { store } from '../store.js';
 import { requestSam3d } from './sam3d.js';
+import { fetchFootprint } from '../providers/footprint.js';
+import { geocode } from '../providers/geo.js';
 
 export class PipelineError extends Error {
   constructor(
@@ -153,6 +156,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     await ctx.log('parse', live ? 'No raster plan available for Muse; using the fixture reference interpretation' : 'Using the fixture reference interpretation (hand-authored stand-in for Muse Spark)', 'warn');
   } else {
     const hints = property.roomHints ?? [];
+    const footprint = await buildingOutline(ctx, property);
     const facts = { bedrooms: property.bedrooms, bathrooms: property.bathrooms ?? null, floors: property.floors ?? null, areaSqM: property.areaSqM, propertyType: property.status, description: property.description ?? null, address: property.address };
     if (plans.length && !live) await ctx.log('parse', 'The floor plan can’t be read automatically without MODEL_API_KEY. Trace it in the plan editor (free, no AI) for a plan-accurate model; estimating the layout for now', 'warn');
     else if (!plans.length) await ctx.log('parse', 'No floor plan in this listing; estimating the layout', 'warn');
@@ -175,7 +179,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
         });
         const links = rooms.reduce((a, x) => a + (x.connectsTo?.length ?? 0), 0);
         await ctx.log('parse', `Muse read ${rooms.length} rooms and ${links} room connections from ${sample.length} photos; arranging them to fit`);
-        interp = layoutFromRoomList({ rooms, hints: { hallway: property.hallway ?? r.hallway, aspect: r.aspect }, statedTotalAreaSqM: property.areaSqM, provenance: r.provenance, uncertainties: r.notes, confidence: 0.45, layoutSource: 'photos' });
+        interp = layoutFromRoomList({ rooms, footprint, hints: { hallway: property.hallway ?? r.hallway, aspect: r.aspect }, statedTotalAreaSqM: property.areaSqM, provenance: r.provenance, uncertainties: r.notes, confidence: 0.45, layoutSource: 'photos' });
       }
     }
     if (!interp) {
@@ -185,6 +189,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
       const links = hints.reduce((a, h) => a + (h.connectsTo?.length ?? 0), 0);
       interp = layoutFromRoomList({
         rooms: roomListFromEvidence(facts, labels, hints),
+        footprint,
         hints: { hallway: property.hallway ?? null },
         statedTotalAreaSqM: property.areaSqM,
         provenance: {
@@ -454,6 +459,44 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * The building's real outline from OpenStreetMap, fetched once per property and cached on it.
+ * Coordinates come from the listing, else from geocoding the address. Never fatal.
+ */
+async function buildingOutline(ctx: Ctx, property: NonNullable<ReturnType<typeof store.get<'properties'>>>): Promise<Vec2[] | null> {
+  if (property.useFootprint === false) {
+    await ctx.log('parse', 'Building outline switched off for this property; using an estimated rectangle');
+    return null;
+  }
+  if (property.footprint !== undefined) {
+    if (property.footprint) await ctx.log('parse', `Using the building outline from OpenStreetMap (${property.footprint.osmId}, ${property.footprint.areaSqM} m² footprint)`);
+    return property.footprint?.polygonM ?? null;
+  }
+  let loc = property.location;
+  try {
+    if (!loc && property.address && !/^(uploaded property|imported images|untitled)/i.test(property.address)) {
+      const g = await geocode(property.address);
+      if (g) loc = { lat: g.lat, lng: g.lng };
+    }
+    if (!loc) {
+      await ctx.log('parse', 'No location for this property (add the full address on the review screen) — the building outline can’t be looked up', 'warn');
+      return null;
+    }
+    const fp = await fetchFootprint(loc.lat, loc.lng);
+    const next = { ...property, location: loc, footprint: fp ? { ...fp, fetchedAt: now() } : null };
+    await store.put('properties', property.id, next);
+    if (!fp) {
+      await ctx.log('parse', 'OpenStreetMap has no building outline at this address; using an estimated rectangle', 'warn');
+      return null;
+    }
+    await ctx.log('parse', `Building outline from OpenStreetMap: ${fp.osmId}, ${fp.polygonM.length} corners, ${fp.areaSqM} m² footprint${property.areaSqM ? ` (listing says ${property.areaSqM} m² living area)` : ''}; front chosen by ${fp.front === 'nearest-road' ? 'the nearest street' : 'the longest side'}`);
+    return fp.polygonM;
+  } catch (e) {
+    await ctx.log('parse', `Building outline lookup failed (${(e as Error).message}); using an estimated rectangle`, 'warn');
+    return null;
+  }
+}
 
 /**
  * Room for a user-supplied label: a room id, an exact label ("Bedroom 2"), or a

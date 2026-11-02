@@ -84,6 +84,21 @@ export const Property = z.object({
   hallway: z.boolean().nullable().optional(),
   /** Outside finish seen in exterior photos (set on the review screen). Default: generic brick + tiled roof. */
   exterior: z.lazy(() => ExteriorFinish).optional(),
+  /** The building's real outline (OpenStreetMap), metres, front at max z. null = looked, none found. */
+  footprint: z
+    .object({
+      source: z.literal('openstreetmap'),
+      osmId: z.string(),
+      polygonM: z.array(Vec2).min(3),
+      areaSqM: z.number(),
+      front: z.enum(['nearest-road', 'longest-side']),
+      attribution: z.string(),
+      fetchedAt: z.string(),
+    })
+    .nullable()
+    .optional(),
+  /** false = the person chose not to use the outline. */
+  useFootprint: z.boolean().optional(),
   areaSqM: z.number().nullable(),
   areaEvidence: z.string().nullable(),
   /** Listing text, when the source provides it (used as context for estimated layouts). */

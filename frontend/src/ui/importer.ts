@@ -161,6 +161,7 @@ export class ImportFlow {
       <div class="mgrid">${plans.map(card).join('') || '<div class="empty xs">None yet. Change an image’s type to “Floor plan”.</div>'}</div>
       ${groupKeys.map((k) => `<h3>${k ? esc(k) : 'Not labelled yet'} <span class="faint">${groups.get(k)!.length}</span></h3><div class="mgrid">${groups.get(k)!.map(card).join('')}</div>`).join('') || '<h3>Photos</h3><div class="empty">No photos yet.</div>'}
       <p class="xs faint">Photos with the same room label are treated as views of one room. Labels are hints: on the Rooms tab you can reassign any photo after the build.</p>
+      ${!plans.length ? this.renderOutline() : ''}
       ${!plans.length ? this.renderHints(groupKeys.filter((k) => k && typeFromLabel(k))) : ''}
       ${this.renderExterior()}
       ${caps?.sam3d ? `<div class="card sam3d-opt">
@@ -205,6 +206,30 @@ export class ImportFlow {
           </div>`;
         })
         .join('')}</div>`;
+  }
+
+  /** The building's real outline from OpenStreetMap (looked up at the first build). */
+  private renderOutline(): string {
+    const p = this.property!;
+    const fp = p.footprint;
+    const off = p.useFootprint === false;
+    const toggle = `<label class="mini-switch"><input type="checkbox" data-use-footprint ${off ? '' : 'checked'} />Use the real building outline</label>`;
+    if (fp) {
+      const xs = fp.polygonM.map((q) => q[0]);
+      const zs = fp.polygonM.map((q) => q[1]);
+      const W = Math.max(...xs);
+      const D = Math.max(...zs);
+      return `<h3>Building outline</h3>
+        <div class="outline-row card">
+          <svg viewBox="-0.5 -0.5 ${W + 1} ${D + 1.6}" class="outline-svg" aria-label="Building outline"><polygon points="${fp.polygonM.map((q) => q.join(',')).join(' ')}" /><text x="${W / 2}" y="${D + 1.2}" font-size="${Math.max(W, D) / 14}">street side</text></svg>
+          <div><b>${fp.areaSqM} m² footprint</b> <span class="xs muted">· ${fp.polygonM.length} corners</span><p class="xs muted">${esc(fp.attribution)} (${esc(fp.osmId)}). The rooms are arranged inside this shape; the front faces ${fp.front === 'nearest-road' ? 'the nearest street' : 'the longest side (no street found)'}.</p>${toggle}</div>
+        </div>`;
+    }
+    return `<h3>Building outline</h3><p class="xs muted">${
+      fp === null
+        ? 'OpenStreetMap has no outline for this address, so the house is drawn as an estimated rectangle.'
+        : 'When you generate, WalkIn looks up the real outline of this building on OpenStreetMap (from the listing’s location, or the address above — use the full street address) and fits the rooms inside it.'
+    }</p>${toggle}`;
   }
 
   /** Outside walls and roof as seen in the exterior photos. */
@@ -433,7 +458,10 @@ export class ImportFlow {
     else if (el.dataset.mediaInclude) await this.patch(el.dataset.mediaInclude, { excluded: !el.checked });
     else if (el.dataset.mediaType) await this.patch(el.dataset.mediaType, { type: el.value as 'photo' | 'floorplan' });
     else if (el.dataset.mediaRoom) await this.patch(el.dataset.mediaRoom, { roomGuess: el.value.trim() || null }, true);
-    else if (el.hasAttribute('data-sam3d-on')) this.sam3d.on = el.checked;
+    else if (el.hasAttribute('data-use-footprint')) {
+      this.property = (await api.updateProperty(this.property!.id, { useFootprint: el.checked })).property;
+      this.host.rerender();
+    } else if (el.hasAttribute('data-sam3d-on')) this.sam3d.on = el.checked;
     else if (el.hasAttribute('data-sam3d-max')) this.sam3d.max = Math.max(1, Math.min(25, Number(el.value) || 8));
     else if (el.dataset.ext || el.dataset.extPreset !== undefined) await this.saveExterior(el);
     else if (el.dataset.hintSide) await this.saveHints((hs) => (this.hintFor(hs, el.dataset.hintSide!).side = el.value as RoomHint['side']));
