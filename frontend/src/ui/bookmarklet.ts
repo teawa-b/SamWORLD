@@ -8,6 +8,8 @@ function collect(walkinOrigin: string) {
   const seen: Record<string, { url: string; plan: boolean }> = {};
   const out: { url: string; plan: boolean }[] = [];
   const planRe = /floor\s?plan/i;
+  // Zillow's floor-plan viewer: ?imxlb=f,0 means the image viewer is open on the floor-plans set.
+  const planViewerOpen = /[?&]imxlb=f\b/i.test(location.search);
   const add = (raw: string | null | undefined, plan: boolean) => {
     if (!raw || raw.startsWith('data:')) return;
     let u: string;
@@ -43,7 +45,8 @@ function collect(walkinOrigin: string) {
     const e = el as HTMLImageElement;
     const around = (e.closest('[aria-label],figure,li,button') as HTMLElement | null)?.textContent?.slice(0, 120) ?? '';
     const ctx = `${e.alt ?? ''} ${e.getAttribute('aria-label') ?? ''} ${e.getAttribute('title') ?? ''} ${around}`;
-    const plan = planRe.test(ctx);
+    const inViewer = !!e.closest('[role="dialog"],[aria-modal="true"]');
+    const plan = planRe.test(ctx) || (planViewerOpen && inViewer);
     add(largest(e.getAttribute('srcset') ?? e.getAttribute('data-srcset')), plan);
     add(e.currentSrc || e.src || e.getAttribute('data-src'), plan);
   });
@@ -56,7 +59,7 @@ function collect(walkinOrigin: string) {
     while ((m = re.exec(t))) {
       // The JSON key this URL sits under (ignoring generic ones like "url"): "floorPlans": [...] → a plan.
       const keys = (t.slice(Math.max(0, m.index - 300), m.index).match(/"([A-Za-z_]+)"\s*:/g) ?? []).map((k) => k.replace(/[":\s]/g, '')).filter((k) => !/^(url|href|src|uri|link|jpeg|webp|width|height|mixedSources)$/i.test(k));
-      add(m[0], planRe.test(keys[keys.length - 1] ?? '') || /floor.?plan/i.test(m[0]));
+      add(m[0], /floor/i.test(keys[keys.length - 1] ?? '') || /floor.?plan/i.test(m[0]));
     }
   });
   if (!out.length) return void alert('WalkIn: no listing images found on this page.');
