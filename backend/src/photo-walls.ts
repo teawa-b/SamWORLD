@@ -226,7 +226,12 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
         try {
           const gen = await museFill(scan.id, plane.id, col, seenMask, tw, th, plane.surface === 'walls' ? 'wall' : plane.surface, inpaint);
           if (gen) {
+            const smooth = Float32Array.from(col);
             composite(col, gen, seenMask, tw, th);
+            // Muse sometimes continues the specks it sees near the gaps into its fill: those go back to smooth.
+            const ok = new Uint8Array(tw * th).fill(1);
+            dropSpecks(col, ok, tw, th);
+            for (let t = 0; t < tw * th; t++) if (!ok[t] && !seenMask[t]) for (let c = 0; c < 3; c++) col[t * 3 + c] = smooth[t * 3 + c];
             filled = 'muse-image';
           }
         } catch (e) {
