@@ -182,6 +182,11 @@ export class ImportFlow {
       ${ex ? `<p class="xs muted">Found ${ex.found} image(s) on the page (${ex.floorplans} floor plan) via ${esc(ex.adapter)}; ${ex.downloaded} imported${ex.failed.length ? `, ${ex.failed.length} couldn’t be downloaded` : ''}.</p>` : ''}
       ${ex?.notes.length ? ex.notes.map((n) => `<div class="callout info">${icon('info')}<div>${esc(n)}</div></div>`).join('') : ''}
       ${planNote}
+      ${!plans.length ? `<div class="card plan-link">
+        <b>Have the floor plan open on Zillow?</b>
+        <p class="xs muted">Right-click the floor plan image (on a phone: press and hold) → <i>Copy image address</i>, then paste it here. One link per floor.</p>
+        <div class="row-input"><input class="field small" id="plan-link" type="url" placeholder="https://photos.zillowstatic.com/fp/…" /><button class="btn small primary" data-action="add-plan-link" ${this.busy ? 'disabled' : ''}>${this.busy === 'plan-link' ? 'Adding…' : 'Add floor plan'}</button></div>
+      </div>` : ''}
       <div class="review-actions">
         <button class="btn small" data-action="pick-files">${icon('photo', 16)}Add images</button>
         ${caps?.liveMeta ? `<button class="btn small" data-action="suggest-rooms" ${this.busy ? 'disabled' : ''}>${icon('sparkle', 16)}${this.busy === 'suggest' ? 'Looking…' : 'Suggest rooms (Muse)'}</button>` : `<span class="xs faint" title="Needs MODEL_API_KEY on the server">AI room suggestions off: label rooms yourself</span>`}
@@ -474,6 +479,30 @@ export class ImportFlow {
         }
         this.host.openPlanEditor(pid);
         return true;
+      case 'add-plan-link': {
+        const input = document.getElementById('plan-link') as HTMLInputElement | null;
+        const urls = (input?.value ?? '').split(/\s+/).map((u) => u.trim()).filter((u) => /^https?:\/\//.test(u));
+        if (!urls.length) {
+          this.host.toast('Paste the image address of the floor plan (it starts with https://).');
+          return true;
+        }
+        if (urls.some((u) => /zillow\.com\/homedetails/i.test(u))) {
+          this.host.toast('That is the page link. Right-click the floor plan picture itself and choose “Copy image address”.');
+          return true;
+        }
+        this.busy = 'plan-link';
+        this.host.rerender();
+        try {
+          const r = await api.addImageUrls(pid, urls.map((url) => ({ url, type: 'floorplan' as const })));
+          this.media = sortMedia(r.media);
+          const bad = r.results.filter((x) => !x.ok);
+          this.host.toast(bad.length ? `Couldn’t add ${bad.length} link(s): ${bad[0].error}` : `Floor plan added${urls.length > 1 ? 's' : ''}.`);
+        } finally {
+          this.busy = null;
+          this.host.rerender();
+        }
+        return true;
+      }
       case 'find-plan': {
         this.busy = 'find-plan';
         this.host.rerender();

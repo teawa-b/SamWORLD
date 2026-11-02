@@ -462,3 +462,5 @@ label.det .cap { position: absolute; left: 0; bottom: 0; right: 0; font-size: 11
 .collected { padding: 14px; margin: 0 0 16px; border-color: var(--accent); display: grid; gap: 6px; }
 .steps-list { padding-left: 18px; display: grid; gap: 6px; }
 a.bookmarklet { cursor: grab; text-decoration: none; }
+
+.plan-link { padding: 12px; margin: 10px 0; display: grid; gap: 6px; border-color: var(--accent); }

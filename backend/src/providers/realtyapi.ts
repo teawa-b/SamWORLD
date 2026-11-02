@@ -526,8 +526,11 @@ export async function floorPlansElsewhere(address: string, lat: number, lng: num
     });
     if (!same) continue;
     const d = await details('realtor', same.listingId).catch(() => null);
-    console.log(`[realty] floor-plan lookup: ${address} matched Realtor.com ${same.listingId} (${same.address}); ${d?.floorPlans.length ?? 0} floor plan(s)`);
-    if (d?.floorPlans.length) return { urls: d.floorPlans.slice(0, 4), foundOn: 'Realtor.com', listingId: same.listingId, tried };
+    let plans = d?.floorPlans ?? [];
+    // Not tagged? Agents often upload the plan as an ordinary photo: check every photo for a drawing.
+    if (!plans.length && d?.photos.length) plans = (await findDrawings(d.photos.map((u) => ({ thumb: u, full: u })))).map((g) => g.full);
+    console.log(`[realty] floor-plan lookup: ${address} matched Realtor.com ${same.listingId} (${same.address}); ${d?.floorPlans.length ?? 0} tagged floor plan(s), ${plans.length} in total after scanning ${d?.photos.length ?? 0} photos`);
+    if (plans.length) return { urls: plans.slice(0, 4), foundOn: 'Realtor.com', listingId: same.listingId, tried };
   }
   console.log(`[realty] floor-plan lookup: no floor plan found elsewhere for ${address} (tried ${tried.join(', ')})`);
   return { urls: [], foundOn: null, listingId: null, tried };
