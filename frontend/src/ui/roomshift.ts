@@ -419,7 +419,8 @@ export class RoomshiftPanel {
     this.frameRoom();
     // Bring back the most recent finished world for this room.
     this.history = (await call<{ restyles: Restyle[] }>(`/api/scans/${s.id}/restyles`).catch(() => ({ restyles: [] }))).restyles;
-    const last = this.history.find((h) => h.state === 'done' && !h.original) ?? this.history.find((h) => h.original);
+    // The newest finished version (a world, or the room as filmed); the list comes newest first.
+    const last = this.history.find((h) => h.state === 'done');
     if (last && !this.restyle) {
       this.origin = paintOrigin(this.world, s.shell ?? null);
       this.restyle = last;
@@ -484,7 +485,8 @@ export class RoomshiftPanel {
   /** Push whatever has arrived into the 3D room (idempotent). */
   private apply(r: Restyle) {
     for (const o of r.objects ?? []) {
-      if (o.state !== 'done') continue;
+      // Objects found again since this world was made may have new ids: only use pieces that still match.
+      if (o.state !== 'done' || this.scan?.objects?.find((x) => x.id === o.id)?.name !== o.name) continue;
       const done = o.format === 'plane' && o.image ? this.room.placeSurface(o.id, `${BASE}/api/textures/${o.image}`) : o.model && o.format === 'glb' ? this.room.placeModel(o.id, `${BASE}${o.model}`) : null;
       void done?.catch((e) => console.warn(`${o.name} failed to load`, e));
     }
