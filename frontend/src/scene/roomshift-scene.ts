@@ -41,7 +41,7 @@ import {
   type Texture,
   type World,
 } from '@iwsdk/core';
-import { parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
+import { decodeCloud, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
 
 export type SurfaceId = 'walls' | 'floor' | 'ceiling';
 type Bucket = SurfaceId | 'stuff';
@@ -107,15 +107,15 @@ export class RoomScene {
     live.add(this);
   }
 
-  /** Build the room from the scan's PLY and fitted shell. */
-  load(ply: ArrayBuffer, shell: RoomShell | null | undefined) {
+  /** Build the room from the scan's cloud (compact RSC1 or PLY) and fitted shell. */
+  load(cloud: ArrayBuffer, shell: RoomShell | null | undefined) {
     this.clear();
     this.group = new Group();
     this.group.name = 'RoomshiftRoom';
     this.group.add(this.hemi);
     this.shell = shell ?? null;
     const usable = !!shell && !shell.fallback && shell.walls.length === 4;
-    const pc = parsePly(ply, { maxPoints: 1_200_000 });
+    const pc = isEncodedCloud(cloud) ? decodeCloud(cloud) : parsePly(cloud, { maxPoints: 1_200_000 });
     const A = shell?.alignment ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     const W = shell?.size.width ?? 0;
     const D = shell?.size.depth ?? 0;

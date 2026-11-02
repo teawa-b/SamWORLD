@@ -400,7 +400,9 @@ export class RoomshiftPanel {
 
   private async showRoom() {
     const s = this.scan!;
-    const buf = await (await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
+    // Compact cloud first (about a quarter of the size); the PLY if this backend doesn't serve it.
+    const compact = await fetch(`${BASE}/api/scans/${s.id}/cloud.rsc`).catch(() => null);
+    const buf = await (compact?.ok ? compact : await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
     this.room.load(buf, s.shell);
     this.frameRoom();
     // Bring back the most recent finished world for this room.

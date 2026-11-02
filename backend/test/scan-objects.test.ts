@@ -183,3 +183,29 @@ describe('keyframes', () => {
     expect(pickKeyframes(cams.slice(0, 3), 6)).toEqual([0, 1, 2]);
   });
 });
+
+describe('compact cloud', () => {
+  it('round-trips positions to within 2 mm and colours exactly', async () => {
+    const { encodeCloud, decodeCloud, isEncodedCloud } = await import('../src/shared/index.js');
+    const n = 5000;
+    const pos = Float32Array.from({ length: n * 3 }, (_, i) => Math.sin(i * 12.9898) * 3 + (i % 3) * 0.5);
+    const col = Float32Array.from({ length: n * 3 }, (_, i) => ((i * 37) % 256) / 255);
+    const enc = encodeCloud(pos, col);
+    const buf = enc.buffer.slice(enc.byteOffset, enc.byteOffset + enc.byteLength) as ArrayBuffer;
+    expect(isEncodedCloud(buf)).toBe(true);
+    const dec = decodeCloud(buf);
+    expect(dec.count).toBe(n);
+    // Points come back reordered: match each by its colour triple + nearest position.
+    const key = (c: Float32Array, i: number) => `${Math.round(c[i * 3] * 255)},${Math.round(c[i * 3 + 1] * 255)},${Math.round(c[i * 3 + 2] * 255)}`;
+    const byKey = new Map<string, number[]>();
+    for (let i = 0; i < n; i++) (byKey.get(key(col, i)) ?? byKey.set(key(col, i), []).get(key(col, i))!).push(i);
+    let worst = 0;
+    for (let j = 0; j < n; j++) {
+      const cands = byKey.get(key(dec.colors, j));
+      expect(cands).toBeTruthy();
+      const d = Math.min(...cands!.map((i) => Math.max(...[0, 1, 2].map((k) => Math.abs(pos[i * 3 + k] - dec.positions[j * 3 + k])))));
+      worst = Math.max(worst, d);
+    }
+    expect(worst).toBeLessThan(0.002);
+  });
+});

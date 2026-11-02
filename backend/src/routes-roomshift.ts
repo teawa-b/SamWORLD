@@ -6,6 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { config, metaConfigured } from './config.js';
@@ -15,11 +17,25 @@ import { restyleImage, surfaceTexture } from './meta/image.js';
 import { understandScan } from './objects.js';
 import { validateImage } from './providers/ingest.js';
 import { startRestyle, textureDir } from './restyle.js';
-import { fitRoomShell, parsePly } from './shared/index.js';
+import { encodeCloud, fitRoomShell, parsePly } from './shared/index.js';
 import { store, type Restyle, type Scan, type ScanCamera } from './store.js';
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
 const CLOUD_FORMAT = 'voxel-1cm-1m';
+
+/**
+ * The cloud in the compact RSC1 format, gzipped (about a quarter of the PLY's size), written once next to the
+ * PLY. The viewer downloads this; the PLY stays the source of truth.
+ */
+async function compactCloud(scan: Scan): Promise<string> {
+  const file = join(scanDir(scan.id), `${scan.cloud!.file}.rsc.gz`);
+  if (!existsSync(file)) {
+    const ply = await readFile(join(scanDir(scan.id), scan.cloud!.file));
+    const pc = parsePly(ply.buffer.slice(ply.byteOffset, ply.byteOffset + ply.byteLength) as ArrayBuffer, { maxPoints: 2_000_000 });
+    await writeFile(file, await promisify(gzip)(encodeCloud(pc.positions, pc.colors), { level: 6 }));
+  }
+  return file;
+}
 
 function requireScan(id: string): Scan {
   const s = store.get('scans', parse(Id, id));
@@ -95,6 +111,7 @@ async function reconstruct(scan: Scan): Promise<void> {
       objects: [],
       objectsStatus: { state: 'running', message: 'Looking for furniture…', usage: '' },
     });
+    await compactCloud(scan).catch(() => undefined);
     await understandScan(scan);
   } catch (e) {
     await save({ state: 'failed', message: (e as Error).message });
@@ -163,6 +180,15 @@ export async function registerRoomshiftRoutes(app: FastifyInstance) {
     if (!o?.crop || !existsSync(join(scanDir(scanId), o.crop))) throw new HttpError(404, 'NOT_FOUND', 'No crop for this object');
     reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=3600');
     return reply.send(createReadStream(join(scanDir(scanId), o.crop)));
+  });
+
+  /** Same points as cloud.ply in the compact format, sent gzip-encoded (the browser unpacks it). */
+  app.get('/api/scans/:scanId/cloud.rsc', async (req, reply) => {
+    const scan = requireScan((req.params as { scanId: string }).scanId);
+    if (!scan.cloud) throw new HttpError(404, 'NOT_READY', 'No reconstruction yet');
+    const file = await compactCloud(scan);
+    reply.header('content-type', 'application/octet-stream').header('content-encoding', 'gzip').header('cache-control', 'public, max-age=3600');
+    return reply.send(createReadStream(file));
   });
 
   app.get('/api/scans/:scanId/cloud.ply', async (req, reply) => {

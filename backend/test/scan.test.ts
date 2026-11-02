@@ -92,6 +92,14 @@ describe('Roomshift scans', () => {
     const ply = await app.inject({ url: `/api/scans/${scan.id}/cloud.ply` });
     expect(ply.statusCode).toBe(200);
     expect(ply.rawPayload.subarray(0, 3).toString()).toBe('ply');
+    const rsc = await app.inject({ url: `/api/scans/${scan.id}/cloud.rsc` });
+    expect(rsc.statusCode).toBe(200);
+    expect(rsc.headers['content-encoding']).toBe('gzip');
+    const { gunzipSync } = await import('node:zlib');
+    const { decodeCloud } = await import('../src/shared/index.js');
+    const raw = gunzipSync(rsc.rawPayload);
+    expect(decodeCloud(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer).count).toBe(s.cloud.points);
+    expect(rsc.rawPayload.length).toBeLessThan(ply.rawPayload.length / 2);
     // Same frames again: cached, no second GPU call.
     const before = calls;
     await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/reconstruct`, payload: {} });
