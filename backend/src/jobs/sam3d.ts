@@ -226,6 +226,8 @@ export async function requestSam3d(opts: {
   objects: SceneObject[];
   detections: Detection[];
   log: (msg: string, level?: StepLog['level']) => Promise<void>;
+  /** How many objects to rebuild this run (the person chose this on the review screen). */
+  max?: number;
 }): Promise<{ objects: SceneObject[]; state: EvidenceFlags['sam3d'] }> {
   const ready = sam3dReady();
   if (!ready.ok) {
@@ -237,19 +239,28 @@ export async function requestSam3d(opts: {
     .map((o) => ({ o, det: detectionFor(o, opts.detections) }))
     .filter((x): x is { o: SceneObject; det: Detection } => !!x.det)
     .sort((a, b) => b.o.sizeM[0] * b.o.sizeM[2] - a.o.sizeM[0] * a.o.sizeM[2])
-    .slice(0, config.sam3d.maxObjectsPerRun);
+    // One reconstruction per detection: two proxies matched to the same outline would just duplicate it.
+    .filter((x, i, all) => all.findIndex((y) => y.det.id === x.det.id) === i)
+    .slice(0, Math.max(0, opts.max ?? config.sam3d.maxObjectsPerRun));
   if (!heroes.length) {
     await opts.log('SAM 3D: no object has a SAM 3.1 detection to reconstruct from; proxies kept');
     return { objects: opts.objects, state: 'failed' };
   }
-  let used = false;
+  await opts.log(`SAM 3D: rebuilding ${heroes.length} item(s) from their photos (${heroes.map((h) => h.o.kind).join(', ')}), 3 at a time`);
+  let ok = 0;
   const out = [...opts.objects];
-  for (const { o, det } of heroes) {
-    const r = await reconstructObject(o, det, opts.log);
-    if (r.ok) {
-      out[out.findIndex((x) => x.id === o.id)] = r.object;
-      used = true;
+  let next = 0;
+  const worker = async () => {
+    while (next < heroes.length) {
+      const { o, det } = heroes[next++];
+      const r = await reconstructObject(o, det, opts.log);
+      if (r.ok) {
+        out[out.findIndex((x) => x.id === o.id)] = { ...r.object, positionXYZ: o.positionXYZ, rotationY: o.rotationY };
+        ok++;
+      }
     }
-  }
-  return { objects: out, state: used ? 'used' : 'failed' };
+  };
+  await Promise.all(Array.from({ length: Math.min(3, heroes.length) }, worker));
+  await opts.log(`SAM 3D: ${ok} of ${heroes.length} item(s) rebuilt from photos${ok < heroes.length ? '; the rest keep stand-in shapes' : ''}`, ok < heroes.length ? 'warn' : 'info');
+  return { objects: out, state: ok ? 'used' : 'failed' };
 }

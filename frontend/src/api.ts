@@ -125,7 +125,7 @@ export const api = {
   importListing: (provider: string, listingId: string) => call<{ property: Property; media: PropertyMedia[] }>('/api/properties/import', { method: 'POST', body: JSON.stringify({ provider, listingId }) }),
   property: (id: string) => call<{ property: Property; latestRun: ReconstructionRun | null; hasScene: boolean }>(`/api/properties/${id}`),
   media: (id: string) => call<{ media: PropertyMedia[] }>(`/api/properties/${id}/media`),
-  reconstruct: (id: string, opts: { forceReparse?: boolean } = {}) => call<{ jobId: string }>(`/api/properties/${id}/reconstruct`, { method: 'POST', body: JSON.stringify(opts) }),
+  reconstruct: (id: string, opts: { forceReparse?: boolean; sam3dApproved?: boolean; sam3dMaxObjects?: number } = {}) => call<{ jobId: string }>(`/api/properties/${id}/reconstruct`, { method: 'POST', body: JSON.stringify(opts) }),
   job: (id: string) => call<ReconstructionRun>(`/api/reconstruction-jobs/${id}`),
   async scene(id: string): Promise<SceneManifest> {
     if (staticMode) return (await fetch(`${STATIC}${id}.json`)).json();

@@ -435,7 +435,7 @@ export const ReconstructionRun = z.object({
   step: z.string(),
   progress: z.number().min(0).max(1),
   attempts: z.number().int(),
-  options: z.object({ forceReparse: z.boolean(), sam3dApproved: z.boolean() }),
+  options: z.object({ forceReparse: z.boolean(), sam3dApproved: z.boolean(), sam3dMaxObjects: z.number().int().min(0).max(25).optional() }),
   heartbeatAt: z.string().nullable(),
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),

@@ -77,7 +77,7 @@ interface Ctx {
 
 const now = () => new Date().toISOString();
 
-export async function runPipeline(runId: string, opts: { forceReparse?: boolean; sam3dApproved?: boolean } = {}): Promise<void> {
+export async function runPipeline(runId: string, opts: { forceReparse?: boolean; sam3dApproved?: boolean; sam3dMaxObjects?: number } = {}): Promise<void> {
   const run = store.get('runs', runId);
   if (!run) throw new Error(`run ${runId} not found`);
   const budget = new AiBudget();
@@ -167,6 +167,8 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
         interp = { ...(await parseWithMuse(ctx, planImages, property.areaSqM, config.meta.museModel)), layoutSource: 'photo-floorplan' };
       } else if (r.rooms.length) {
         // The person's own room hints override Muse's reading of the same room.
+        // The person (or the listing) said one floor: keep every room on it whatever Muse guessed.
+        if (property.floors === 1) r.rooms.forEach((room) => (room.level = 0));
         const rooms = r.rooms.map((room) => {
           const h = hints.find((x) => x.label.trim().toLowerCase() === room.label.trim().toLowerCase());
           return h ? { ...room, ...Object.fromEntries(Object.entries(h).filter(([k, v]) => k !== 'label' && v != null && !(Array.isArray(v) && !v.length))) } : room;
@@ -389,7 +391,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     if (config.sam3d.requireManualApproval && !opts.sam3dApproved) {
       await ctx.log('place', 'SAM 3D enabled but this run was not manually approved; proxies kept');
     } else {
-      const r = await requestSam3d({ objects, detections, log: (m, l) => ctx.log('place', m, l) });
+      const r = await requestSam3d({ objects, detections, max: opts.sam3dMaxObjects ?? config.sam3d.maxObjectsPerRun, log: (m, l) => ctx.log('place', m, l) });
       objects = r.objects;
       sam3dState = r.state;
     }

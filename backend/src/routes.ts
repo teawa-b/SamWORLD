@@ -139,7 +139,10 @@ export async function registerRoutes(app: FastifyInstance) {
   app.post('/api/properties/:propertyId/reconstruct', async (req, reply) => {
     rateLimit(req, 6);
     const property = requireProperty((req.params as { propertyId: string }).propertyId);
-    const opts = parse(z.object({ forceReparse: z.boolean().default(false), sam3dApproved: z.boolean().default(false) }).default({ forceReparse: false, sam3dApproved: false }), req.body ?? {});
+    const opts = parse(
+      z.object({ forceReparse: z.boolean().default(false), sam3dApproved: z.boolean().default(false), sam3dMaxObjects: z.number().int().min(0).max(25).optional() }).default({ forceReparse: false, sam3dApproved: false }),
+      req.body ?? {},
+    );
     const active = Object.values(store.all('runs')).find((r) => r.propertyId === property.id && !['READY', 'FAILED'].includes(r.state));
     if (active) return reply.status(202).send({ jobId: active.id, reused: true });
     const run: ReconstructionRun = {

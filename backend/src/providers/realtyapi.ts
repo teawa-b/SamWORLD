@@ -284,12 +284,21 @@ async function details(provider: RealtyProvider, listingId: string): Promise<Det
       call<Json>('zillow', '/propimages', { byzpid: listingId }, ttl).catch((): Json => ({})),
     ]);
     const a = d.PropertyAddress ?? {};
-    const photos = (imgs.originalPhotos ?? [])
-      .map((p: Json) => {
-        const jpeg: Json[] = p.mixedSources?.jpeg ?? [];
-        return jpeg.sort((x, y) => (num(y.width) ?? 0) - (num(x.width) ?? 0))[0]?.url ?? firstUrl(p);
-      })
-      .filter(Boolean);
+    const best = (p: Json) => {
+      const jpeg: Json[] = p.mixedSources?.jpeg ?? [];
+      return jpeg.sort((x, y) => (num(y.width) ?? 0) - (num(x.width) ?? 0))[0]?.url ?? firstUrl(p);
+    };
+    // Some listings caption the plan among the photos; others keep it in a separate floor-plan field.
+    const isPlanPhoto = (p: Json) => /floor.?plan|floorplan/i.test(`${p.caption ?? ''} ${p.subjectType ?? ''} ${p.title ?? ''}`);
+    const all: Json[] = imgs.originalPhotos ?? [];
+    const photos = all.filter((p) => !isPlanPhoto(p)).map(best).filter(Boolean);
+    const planFields = [...findFloorPlanUrls(d, 'byzpid'), ...findFloorPlanUrls(imgs, 'propimages')];
+    const floorPlans = [...new Set([...all.filter(isPlanPhoto).map(best).filter(Boolean), ...planFields.map((h) => h.url)])];
+    console.log(
+      `[realty] zillow ${listingId}: ${photos.length} photos, ${floorPlans.length} floor plan(s)` +
+        `; fields mentioning floor plans: ${[...new Set(planFields.map((h) => h.path))].join(', ') || 'none'}` +
+        `; top-level keys: ${Object.keys(d).slice(0, 60).join(',')}`,
+    );
     const sqft = num(d['Area(sqft)']);
     return {
       address: [a.streetAddress, a.city, a.state, a.zipcode].filter(Boolean).join(', ') || 'Zillow listing',
@@ -301,7 +310,7 @@ async function details(provider: RealtyProvider, listingId: string): Promise<Det
       url: str(d.PropertyZillowURL),
       description: '',
       photos: photos.length ? photos : urls([imgs.hiResImageLink]),
-      floorPlans: [], // not exposed by this endpoint
+      floorPlans,
       status: 'listing',
     };
   }
@@ -324,6 +333,21 @@ async function details(provider: RealtyProvider, listingId: string): Promise<Det
     floorPlans: [...photoObjs.filter(isPlan).map((p) => firstUrl(p)), ...urls(d.floorplans)].filter((u): u is string => !!u),
     status: str(d.status) ?? 'listing',
   };
+}
+
+/** Image URLs anywhere under a key that names a floor plan (Zillow's field names vary by listing). */
+export function findFloorPlanUrls(node: unknown, path = '', depth = 0, under = false): { url: string; path: string }[] {
+  if (depth > 10 || node == null) return [];
+  if (typeof node === 'string') return under && /^https?:\/\/.+\.(jpe?g|png|webp)(\?|$)/i.test(node) ? [{ url: node, path }] : [];
+  if (Array.isArray(node)) return node.flatMap((n) => findFloorPlanUrls(n, path, depth + 1, under));
+  if (typeof node !== 'object') return [];
+  const o = node as Json;
+  // An object with responsive sources: take only its widest jpeg.
+  if (under && Array.isArray(o.mixedSources?.jpeg)) {
+    const u = [...o.mixedSources.jpeg].sort((x: Json, y: Json) => (num(y.width) ?? 0) - (num(x.width) ?? 0))[0]?.url;
+    if (u) return [{ url: u, path }];
+  }
+  return Object.entries(o).flatMap(([k, v]) => findFloorPlanUrls(v, path ? `${path}.${k}` : k, depth + 1, under || /floor.?plan/i.test(k)));
 }
 
 async function download(url: string, propertyId: string, name: string): Promise<{ key: string; mime: string } | null> {

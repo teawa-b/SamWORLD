@@ -31,7 +31,7 @@ export interface ImportHost {
   toast(msg: string): void;
   rerender(): void;
   openReview(propertyId: string): Promise<void>;
-  startBuild(propertyId: string): Promise<void>;
+  startBuild(propertyId: string, opts?: { sam3dApproved?: boolean; sam3dMaxObjects?: number }): Promise<void>;
   openPlanEditor(propertyId: string): void;
   openDiscover(): void;
   caps(): Capabilities | null;
@@ -44,6 +44,8 @@ export class ImportFlow {
   lastExtraction: Extraction | null = null;
   busy: string | null = null;
   private rights = false;
+  /** Real furniture from the photos (SAM 3D): off unless ticked; how many items at most. */
+  sam3d = { on: false, max: 8 };
   private urlDraft = '';
   private importError: string | null = null;
 
@@ -161,6 +163,11 @@ export class ImportFlow {
       <p class="xs faint">Photos with the same room label are treated as views of one room. Labels are hints: on the Rooms tab you can reassign any photo after the build.</p>
       ${!plans.length ? this.renderHints(groupKeys.filter((k) => k && typeFromLabel(k))) : ''}
       ${this.renderExterior()}
+      ${caps?.sam3d ? `<div class="card sam3d-opt">
+        <label class="switch"><input type="checkbox" data-sam3d-on ${this.sam3d.on ? 'checked' : ''} /><b>Build real furniture from the photos (SAM 3D${caps.sam3dProvider ? ` on ${esc(caps.sam3dProvider)}` : ''})</b></label>
+        <p class="xs muted">After SAM 3.1 finds each piece of furniture in the photos, SAM 3D turns the biggest ones into textured 3D models of the actual items. Without this, furniture is shown as simple stand-in shapes. Paid per item on your ${esc(caps.sam3dProvider ?? 'GPU')} account; results are cached so rebuilding doesn't pay again.</p>
+        <label class="xs muted">Up to <input class="field small" style="width:70px;display:inline-block" type="number" min="1" max="25" data-sam3d-max value="${this.sam3d.max}" /> items</label>
+      </div>` : ''}
       <div class="sticky-cta">
         <button class="btn primary block" data-action="generate" ${included.length ? '' : 'disabled'}>${icon('cube')}Generate 3D</button>
         <p class="xs faint" style="text-align:center;margin:6px 0 0">${included.length} of ${this.media.length} images will be used · ${caps?.liveMeta ? `Meta ${esc(caps.museModel)} + ${esc(caps.samModel)}` : 'no AI (demo mode)'}</p>
@@ -411,7 +418,7 @@ export class ImportFlow {
       }
       case 'generate':
         await this.saveFacts();
-        await this.host.startBuild(pid);
+        await this.host.startBuild(pid, this.sam3d.on ? { sam3dApproved: true, sam3dMaxObjects: this.sam3d.max } : {});
         return true;
     }
     return false;
@@ -426,6 +433,8 @@ export class ImportFlow {
     else if (el.dataset.mediaInclude) await this.patch(el.dataset.mediaInclude, { excluded: !el.checked });
     else if (el.dataset.mediaType) await this.patch(el.dataset.mediaType, { type: el.value as 'photo' | 'floorplan' });
     else if (el.dataset.mediaRoom) await this.patch(el.dataset.mediaRoom, { roomGuess: el.value.trim() || null }, true);
+    else if (el.hasAttribute('data-sam3d-on')) this.sam3d.on = el.checked;
+    else if (el.hasAttribute('data-sam3d-max')) this.sam3d.max = Math.max(1, Math.min(25, Number(el.value) || 8));
     else if (el.dataset.ext || el.dataset.extPreset !== undefined) await this.saveExterior(el);
     else if (el.dataset.hintSide) await this.saveHints((hs) => (this.hintFor(hs, el.dataset.hintSide!).side = el.value as RoomHint['side']));
     else if (el.dataset.hintEntrance) {

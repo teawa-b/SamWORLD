@@ -108,7 +108,7 @@ export class Panel {
       toast: (m) => this.toast(m),
       rerender: () => (this.view.name === 'import' || this.view.name === 'review') && this.renderKeepScroll(),
       openReview: (id) => this.openProperty(id),
-      startBuild: (id) => this.build(id),
+      startBuild: (id, opts) => this.build(id, opts),
       openPlanEditor: (id) => this.openPlanEditor(id),
       openDiscover: () => this.go({ name: 'discover' }),
       caps: () => this.caps,
@@ -778,8 +778,8 @@ export class Panel {
     else if (k === 'e' && app.selectedRoomId.value) enterRoom(this.world, app.selectedRoomId.value);
   }
 
-  private async build(pid: string) {
-    const { jobId } = await api.reconstruct(pid);
+  private async build(pid: string, opts: { sam3dApproved?: boolean; sam3dMaxObjects?: number } = {}) {
+    const { jobId } = await api.reconstruct(pid, opts);
     this.watchJob(pid, jobId);
   }
 
