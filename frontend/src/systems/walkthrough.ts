@@ -129,6 +129,18 @@ const look = { yaw: 0, pitch: 0, dragging: false, lastX: 0, lastY: 0, dragDist: 
 const keys = new Set<string>();
 let orbit: OrbitControls | null = null;
 
+/** Point the orbit camera at a target from a distance (used for 1:1 room scans). */
+export function focusOrbit(world: World, target: [number, number, number], distance: number) {
+  if (orbit) {
+    orbit.maxDistance = Math.max(4, distance * 3);
+    orbit.minDistance = 0.1;
+    orbit.target.set(...target);
+  }
+  world.camera.position.set(target[0] + distance * 0.6, target[1] + distance * 0.8, target[2] + distance * 0.9);
+  world.camera.rotation.set(0, 0, 0);
+  orbit?.update();
+}
+
 export function resetOrbit(world: World) {
   // Portrait screens need the camera further back to fit the house.
   const el = world.renderer.domElement;

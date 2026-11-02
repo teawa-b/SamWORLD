@@ -70,6 +70,14 @@ export const config = {
     requireManualApproval: bool(process.env.SAM3D_REQUIRE_MANUAL_APPROVAL, false),
   },
 
+  /** Roomshift: MapAnything (Meta, Apache 2.0) on the owner's Modal GPU worker (worker-3d/mapanything_app.py). */
+  mapanything: {
+    url: process.env.MAPANYTHING_URL ?? '',
+    token: process.env.MAPANYTHING_TOKEN ?? '',
+    timeoutSeconds: int(process.env.MAPANYTHING_TIMEOUT_SECONDS, 300),
+    maxFrames: int(process.env.SCAN_MAX_FRAMES, 60),
+  },
+
   jobs: {
     maxAttempts: int(process.env.JOB_MAX_ATTEMPTS, 2),
     staleAfterMs: int(process.env.JOB_STALE_AFTER_MS, 5 * 60_000),
@@ -90,5 +98,6 @@ export function capabilities() {
     realtyApi: config.realty.apiKey.length > 0,
     sam3d: config.sam3d.enabled && (config.sam3d.provider === 'fal' ? !!config.sam3d.falKey : !!config.sam3d.endpointUrl),
     sam3dProvider: config.sam3d.enabled ? config.sam3d.provider : null,
+    scan: !!config.mapanything.url && !!config.mapanything.token,
   };
 }

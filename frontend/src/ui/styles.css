@@ -464,3 +464,6 @@ label.det .cap { position: absolute; left: 0; bottom: 0; right: 0; font-size: 11
 a.bookmarklet { cursor: grab; text-decoration: none; }
 
 .plan-link { padding: 12px; margin: 10px 0; display: grid; gap: 6px; border-color: var(--accent); }
+
+.progress .indeterminate { animation: indet 1.4s ease-in-out infinite; }
+@keyframes indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }

@@ -16,17 +16,20 @@ import { store } from './store.js';
 import { MODEL_IMAGE_TYPES, toDataUrl } from './lib/image.js';
 import { readFile } from 'node:fs/promises';
 import { registerImportRoutes } from './routes-import.js';
+import { registerRoomshiftRoutes } from './routes-roomshift.js';
 import { HttpError, Id, now, parse, rateLimit, requireProperty, sendFile } from './http.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.setErrorHandler((err, _req, reply) => {
     const e = err as Error & { status?: number; statusCode?: number; code?: string };
-    const status = e instanceof HttpError ? e.status : (e.statusCode ?? 500);
+    // HttpError, Fastify errors (statusCode), and domain errors that carry an HTTP status (e.g. IngestError).
+    const status = e instanceof HttpError ? e.status : (e.statusCode ?? (typeof (e as { status?: unknown }).status === 'number' ? (e as { status: number }).status : 500));
     if (status >= 500) app.log.error(err);
     reply.status(status).send({ error: { code: e.code ?? 'INTERNAL', message: status >= 500 && !(e instanceof HttpError) ? 'Internal error' : e.message } });
   });
 
   await registerImportRoutes(app);
+  await registerRoomshiftRoutes(app);
 
   app.get('/health', async () => ({ ok: true, time: now(), capabilities: capabilities(), realtyApi: realtyStatus(), metaModels: lastResolution && { available: lastResolution.available, changed: lastResolution.changed, probes: lastResolution.probes ?? null, error: lastResolution.error ?? null } }));
 

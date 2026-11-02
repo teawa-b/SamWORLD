@@ -29,6 +29,33 @@ export interface Collections {
   usage: Record<string, { day: string; redesigns: number }>;
   /** Per-object SAM 3D requests started from the viewer. */
   objectJobs: Record<string, ObjectJob>;
+  /** Roomshift: room captures and their 3D reconstruction. */
+  scans: Record<string, Scan>;
+}
+
+export interface ScanCamera {
+  /** 4×4 world-from-camera, row-major, metres, y-up (three.js convention: camera looks down -z). */
+  pose: number[];
+  /** fx, fy, cx, cy in pixels of the frame as uploaded. */
+  intrinsics: [number, number, number, number];
+  width: number;
+  height: number;
+}
+
+export interface Scan {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  frames: { file: string; bytes: number; width: number; height: number }[];
+  state: 'collecting' | 'reconstructing' | 'ready' | 'failed';
+  message: string;
+  /** Point cloud (binary PLY, xyz float + rgb uchar, metres, y-up) once reconstructed. */
+  cloud: { file: string; points: number } | null;
+  cameras: ScanCamera[];
+  bounds: { min: [number, number, number]; max: [number, number, number] } | null;
+  model: string | null;
+  timings: Record<string, number>;
 }
 
 export interface ObjectJob {
@@ -43,7 +70,7 @@ export interface ObjectJob {
 }
 
 type Name = keyof Collections;
-const names: Name[] = ['properties', 'media', 'runs', 'scenes', 'interpretations', 'roomMappings', 'sceneCorrections', 'usage', 'objectJobs'];
+const names: Name[] = ['properties', 'media', 'runs', 'scenes', 'interpretations', 'roomMappings', 'sceneCorrections', 'usage', 'objectJobs', 'scans'];
 
 class Store {
   private cache = new Map<Name, Record<string, unknown>>();
