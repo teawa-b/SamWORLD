@@ -4,7 +4,7 @@
  */
 import type { World } from '@iwsdk/core';
 import type { RoomShell } from '../shared/index.js';
-import { RoomScene, paintOrigin, type SurfaceId } from '../scene/roomshift-scene.js';
+import { RoomScene, paintOrigin, type RoomObject, type SurfaceId } from '../scene/roomshift-scene.js';
 import { app } from '../state.js';
 import { enterScanWalk, exitRoom, focusOrbit } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
@@ -26,6 +26,8 @@ interface Scan {
   timings: Record<string, number>;
   model: string | null;
   shell?: RoomShell | null;
+  objects?: (RoomObject & { label: string; views: number; crop: string | null })[];
+  objectsStatus?: { state: 'running' | 'done' | 'failed' | 'skipped'; message: string; usage: string };
 }
 
 interface Restyle {
@@ -98,6 +100,9 @@ export class RoomshiftPanel {
   private phase = '';
   private prompt = '';
   private error = '';
+  private shown: string | null = null;
+  private selected: string | null = null;
+  private boxesOn = true;
 
   constructor(
     private world: World,
@@ -200,9 +205,11 @@ export class RoomshiftPanel {
     return `
       ${this.error ? `<div class="callout">${icon('alert')}<div>${esc(this.error)}</div></div>` : ''}
       ${sh?.fallback ? `<div class="callout">${icon('alert')}<div><b>Couldn’t find the room’s walls.</b> Showing the raw scan; repainting needs walls and a floor. Try a slower video that sees every wall and some floor.</div></div>` : ''}
+      ${this.objectsHtml(s)}
       ${steps}
       <div class="review-actions">
         ${sh && !sh.fallback ? `<button class="btn small" data-action="walk">${icon(walking ? 'cube' : 'walk', 16)}${walking ? 'Back to overview' : 'Walk inside'}</button>` : ''}
+        ${s.objects?.length ? `<button class="btn small" data-action="boxes">${icon('cube', 16)}${this.boxesOn ? 'Hide' : 'Show'} outlines</button>` : ''}
         ${r ? `<button class="btn small" data-action="original">${icon('reset', 16)}Show original</button>` : ''}
       </div>
       ${walking ? '<p class="xs faint">Drag to look, WASD or arrow keys to move, Esc to leave.</p>' : '<p class="xs faint">Drag to orbit, scroll to zoom.</p>'}
@@ -215,10 +222,25 @@ export class RoomshiftPanel {
           <li><span>GPU time</span><span>${sec('inferSeconds')}</span></li>
           <li><span>Total</span><span>${sec('totalSeconds')}</span></li>
           <li><span>Points</span><span>${s.cloud?.points.toLocaleString()}</span></li>
+          ${s.objectsStatus?.usage ? `<li><span>Objects</span><span>${esc(s.objectsStatus.usage)}</span></li>` : ''}
           ${r?.usage ? `<li><span>Meta API</span><span>${esc(r.usage)}</span></li>` : ''}
         </ul>
         ${sh?.diagnostics.length ? `<ul class="logs">${sh.diagnostics.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
       </details>`;
+  }
+
+  private objectsHtml(s: Scan): string {
+    const st = s.objectsStatus;
+    if (!st) return '';
+    if (st.state === 'running') return `<div class="hint" style="margin-top:12px">${icon('sparkle')}<span>${esc(st.message)}</span></div>`;
+    if (st.state === 'skipped') return `<p class="xs faint" style="margin:12px 0 0">${esc(st.message)}</p>`;
+    if (st.state === 'failed') return `<div class="callout" style="margin-top:12px">${icon('alert')}<div><b>Couldn’t find the furniture.</b> ${esc(st.message)}</div></div><button class="btn small" data-action="find-objects">Look again</button>`;
+    const list = s.objects ?? [];
+    if (!list.length) return `<p class="xs faint" style="margin:12px 0 0">${esc(st.message)} <a href="#" data-action="find-objects">Look again</a></p>`;
+    return `<div class="level-label">In your room · SAM 3.1</div>
+      <div class="scroller">${list
+        .map((o) => `<button class="chip${o.id === this.selected ? ' on' : ''}" data-action="object" data-id="${esc(o.id)}" title="${esc(`${o.box.size.map((v) => v.toFixed(2)).join(' × ')} m · seen in ${o.views} view${o.views > 1 ? 's' : ''}`)}">${o.crop ? `<img src="${BASE}/api/scans/${esc(s.id)}/objects/${esc(o.id)}/crop.jpg" alt="" style="width:22px;height:22px;object-fit:cover;border-radius:6px" />` : ''}${esc(o.name)}</button>`)
+        .join('')}</div>`;
   }
 
   // ------------------------------------------------------------------------------------------ events
@@ -269,6 +291,8 @@ export class RoomshiftPanel {
       this.stopPolls();
       if (app.mode.value === 'walk') exitRoom(this.world);
       this.scan = null;
+      this.shown = null;
+      this.selected = null;
       this.restyle = null;
       this.history = [];
       this.status = '';
@@ -282,6 +306,26 @@ export class RoomshiftPanel {
         this.follow();
       } catch (err) {
         this.scan!.message = (err as Error).message;
+      }
+      this.render();
+    }
+    if (a === 'object') {
+      this.selected = this.selected === t.dataset.id ? null : (t.dataset.id ?? null);
+      if (this.selected && !this.boxesOn) this.room.showObjects((this.boxesOn = true));
+      this.room.highlight(this.selected);
+      this.render();
+    }
+    if (a === 'boxes') {
+      this.room.showObjects((this.boxesOn = !this.boxesOn));
+      this.render();
+    }
+    if (a === 'find-objects' && this.scan) {
+      e.preventDefault();
+      try {
+        this.scan = (await postJson<{ scan: Scan }>(`/api/scans/${this.scan.id}/objects`, {})).scan;
+        this.follow();
+      } catch (err) {
+        this.error = (err as Error).message;
       }
       this.render();
     }
@@ -327,16 +371,26 @@ export class RoomshiftPanel {
 
   // ------------------------------------------------------------------------------------------ scan
 
-  /** Poll the scan until it is ready, then show the room. */
+  /** Poll the scan until it is ready (and its objects are found), showing the room as soon as it can. */
   private follow() {
     if (this.poll) clearInterval(this.poll);
     const tick = async () => {
       if (!this.scan) return;
       this.scan = (await call<{ scan: Scan }>(`/api/scans/${this.scan.id}`)).scan;
-      if (this.scan.state !== 'reconstructing') {
+      const s = this.scan;
+      if (s.state === 'ready') {
+        const key = `${s.id}:${s.cloud?.file}`;
+        if (this.shown !== key) {
+          this.shown = key;
+          await this.showRoom();
+        }
+        this.room.setObjects(s.objects ?? []);
+        this.room.highlight(this.selected);
+        this.room.showObjects(this.boxesOn);
+      }
+      if (s.state !== 'reconstructing' && s.objectsStatus?.state !== 'running') {
         clearInterval(this.poll!);
         this.poll = null;
-        if (this.scan.state === 'ready') await this.showRoom();
       }
       this.render();
     };

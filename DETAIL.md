@@ -117,9 +117,10 @@ video ─► frames (browser) ─► [1 SCAN] MapAnything (Modal GPU) ─► cam
 - [x] Frame capture (browser) + scan upload API + point-cloud viewer (tested against a fake worker)
 
 **Tue 3 Nov**
-- [ ] Structure fitting (floor/ceiling/walls) + viewer showing the scan
-- [ ] Objects: SAM 3.1 keyframes → 3D boxes; Muse names/merges
-- [ ] Plan (Muse Spark) → paint (Muse Image textures + restyles → SAM 3D)
+- [x] Structure fitting (floor/ceiling/walls) + viewer showing the scan — `shared/room-shell.ts`, `scene/roomshift-scene.ts`
+- [x] Objects: SAM 3.1 keyframes → 3D boxes; Muse names/merges — `objects.ts` + `shared/scan-objects.ts` (cloud projected into each keyframe with a z-buffer, shell points dropped, min-area box, merged by shared points); [ ] check on a real scan with the live key
+- [x] Plan (Muse Spark) → paint surfaces (Muse Image textures) — `restyle.ts`
+- [ ] Paint objects: restyle each object's crop (Muse Image) → SAM 3D → GLB in its box
 - [ ] Progressive reveal
 
 **Wed 4 Nov**

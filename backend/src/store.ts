@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   FloorplanInterpretation,
+  ObjectBox,
   Property,
   PropertyMedia,
   ReconstructionRun,
@@ -98,6 +99,25 @@ export interface Scan {
   timings: Record<string, number>;
   /** Floor, ceiling and walls fitted to the cloud (room frame: floor y = 0, centred, axis-aligned walls). */
   shell?: RoomShell | null;
+  /** Furniture found by Muse Spark + SAM 3.1 and lifted into the room frame (objects.ts). */
+  objects?: ScanObject[];
+  objectsStatus?: { state: 'running' | 'done' | 'failed' | 'skipped'; message: string; usage: string; models?: string[] };
+}
+
+export interface ScanObject {
+  id: string;
+  /** SAM concept, e.g. "sofa". */
+  label: string;
+  /** Display name, numbered when there are several ("chair 2"). */
+  name: string;
+  /** Oriented box in the room frame (metres). */
+  box: ObjectBox;
+  /** Cloud points that make up the object, and how many keyframe detections were merged into it. */
+  points: number;
+  views: number;
+  bestFrame: number;
+  /** Crop of the clearest view, served at /api/scans/:id/objects/:objectId/crop.jpg. */
+  crop: string | null;
 }
 
 export interface ObjectJob {

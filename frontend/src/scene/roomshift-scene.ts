@@ -7,10 +7,14 @@
  *    the near walls cull away (dollhouse view) and from inside you see every surface.
  *  - When a surface's new texture arrives, the paint spreads across it from where you are (a growing sphere
  *    in the shader with a glowing edge), then that surface's scan points fade away.
+ *  - Objects found by SAM 3.1 are shown as outlined boxes with their names.
  */
 import {
+  BoxGeometry,
   BufferGeometry,
+  CanvasTexture,
   Color,
+  EdgesGeometry,
   Float32BufferAttribute,
   FogExp2,
   Group,
@@ -24,6 +28,8 @@ import {
   PointsMaterial,
   RepeatWrapping,
   SRGBColorSpace,
+  Sprite,
+  SpriteMaterial,
   TextureLoader,
   Vector3,
   createSystem,
@@ -31,7 +37,7 @@ import {
   type Texture,
   type World,
 } from '@iwsdk/core';
-import { parsePly, transformPointRowMajor, type RoomShell } from '../shared/index.js';
+import { parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
 
 export type SurfaceId = 'walls' | 'floor' | 'ceiling';
 type Bucket = SurfaceId | 'stuff';
@@ -53,7 +59,16 @@ interface Surface {
   painted: string | null;
 }
 
+/** An object found in the scan (backend ScanObject). */
+export interface RoomObject {
+  id: string;
+  name: string;
+  box: ObjectBox;
+}
+
 const TOL = 0.1;
+const OBJ_COLOR = 0x7fd4ff;
+const OBJ_HIGHLIGHT = 0xffc857;
 
 const live = new Set<RoomScene>();
 
@@ -74,6 +89,8 @@ export class RoomScene {
   private loader = new TextureLoader();
   private textures = new Map<string, Promise<Texture>>();
   private prevFog: unknown = undefined;
+  private objects = new Map<string, { root: Group; lines: LineSegments; label: Sprite }>();
+  private objectKey = '';
   shell: RoomShell | null = null;
 
   constructor(private world: World) {
@@ -214,6 +231,51 @@ export class RoomScene {
     }
   }
 
+  /** Show the scan's objects as outlined boxes (no-op when the list hasn't changed). */
+  setObjects(list: RoomObject[]) {
+    const key = JSON.stringify(list.map((o) => [o.id, o.name, o.box]));
+    if (key === this.objectKey) return;
+    this.objectKey = key;
+    this.clearObjects();
+    for (const o of list) {
+      const root = new Group();
+      root.name = `Object_${o.id}`;
+      root.position.set(...o.box.centre);
+      root.rotation.y = o.box.yaw;
+      const lines = new LineSegments(new EdgesGeometry(new BoxGeometry(...o.box.size)), new LineBasicMaterial({ color: OBJ_COLOR, transparent: true, opacity: 0.85, depthTest: false }));
+      lines.renderOrder = 10;
+      const label = nameSprite(o.name);
+      label.position.y = o.box.size[1] / 2 + 0.14;
+      root.add(lines, label);
+      this.group.add(root);
+      this.objects.set(o.id, { root, lines, label });
+    }
+  }
+
+  /** Emphasise one object (or none). */
+  highlight(id: string | null) {
+    for (const [k, o] of this.objects) {
+      const on = k === id;
+      (o.lines.material as LineBasicMaterial).color.setHex(on ? OBJ_HIGHLIGHT : OBJ_COLOR);
+      o.label.scale.setScalar(on ? 1.3 : 1).multiply(o.label.userData.aspect);
+    }
+  }
+
+  showObjects(visible: boolean) {
+    for (const o of this.objects.values()) o.root.visible = visible;
+  }
+
+  private clearObjects() {
+    for (const o of this.objects.values()) {
+      o.lines.geometry.dispose();
+      (o.lines.material as LineBasicMaterial).dispose();
+      (o.label.material as SpriteMaterial).map?.dispose();
+      (o.label.material as SpriteMaterial).dispose();
+      o.root.removeFromParent();
+    }
+    this.objects.clear();
+  }
+
   /** Collision segments for walking ([x, z] pairs), or [] without a shell. */
   wallSegments(): [[number, number], [number, number]][] {
     return this.shell && !this.shell.fallback ? this.shell.walls.map((w) => [w.a, w.b]) : [];
@@ -236,6 +298,8 @@ export class RoomScene {
   }
 
   clear() {
+    this.clearObjects();
+    this.objectKey = '';
     this.entity?.dispose();
     this.entity = null;
     for (const p of this.points.values()) {
@@ -360,4 +424,30 @@ function revealMaterial(reveal: { value: number }, origin: { value: Vector3 }): 
 /** Another wall material sharing the walls' reveal uniforms (each wall gets its own texture repeat). */
 function cloneReveal(s: Surface): MeshStandardMaterial {
   return revealMaterial(s.reveal, s.origin);
+}
+
+/** Small name tag for an object, about 4 cm tall per line of text. */
+function nameSprite(text: string): Sprite {
+  const c = document.createElement('canvas');
+  const g = c.getContext('2d')!;
+  g.font = '600 44px system-ui, sans-serif';
+  c.width = Math.min(1024, Math.ceil(g.measureText(text).width) + 48);
+  c.height = 72;
+  g.fillStyle = 'rgba(12,16,22,0.78)';
+  g.beginPath();
+  g.roundRect(0, 0, c.width, c.height, 36);
+  g.fill();
+  g.font = '600 44px system-ui, sans-serif';
+  g.fillStyle = '#ffffff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(text, c.width / 2, c.height / 2 + 2);
+  const tex = new CanvasTexture(c);
+  tex.colorSpace = SRGBColorSpace;
+  const s = new Sprite(new SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  s.renderOrder = 11;
+  const aspect = new Vector3((0.1 * c.width) / c.height, 0.1, 1);
+  s.userData.aspect = aspect;
+  s.scale.copy(aspect);
+  return s;
 }

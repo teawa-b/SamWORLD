@@ -8,3 +8,4 @@ export * from './typical.js';
 export * from './splat.js';
 export * from './solver.js';
 export * from './room-shell.js';
+export * from './scan-objects.js';

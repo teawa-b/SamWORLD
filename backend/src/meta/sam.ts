@@ -6,7 +6,7 @@
  * Output is 2D boxes/masks in image space. These are evidence, NOT 3D
  * furniture or world positions.
  */
-import { decodeMaskToSVGPath, parseImageStream, recordsOfKind, type ResponsesEvent } from '@meta-sam/parser';
+import { decodeMaskToRaster, decodeMaskToSVGPath, parseImageStream, recordsOfKind, type ResponsesEvent } from '@meta-sam/parser';
 import type { Detection } from '../shared/index.js';
 import { config } from '../config.js';
 import { AiBudget, metaClient } from './client.js';
@@ -37,6 +37,8 @@ async function* normalizedEvents(stream: AsyncIterable<unknown>): AsyncIterable<
 export interface SamImageResult {
   detections: Detection[];
   masks: { detectionId: string; svg: string }[];
+  /** Decoded masks (0/1, row-major) covering `bounds` in source pixels; used to lift objects into 3D. */
+  rasters: { detectionId: string; bounds: { left: number; top: number; right: number; bottom: number }; raster: Uint8Array; width: number; height: number }[];
   diagnostics: string[];
 }
 
@@ -70,6 +72,7 @@ export async function segmentConcept(opts: {
   const masks = recordsOfKind(result.records, 'mask');
   const detections: Detection[] = [];
   const maskOut: SamImageResult['masks'] = [];
+  const rasters: SamImageResult['rasters'] = [];
   const slug = phrase.replace(/\W+/g, '-');
   for (const box of boxes) {
     const id = `${opts.mediaId}-${slug}-${box.objectId}`;
@@ -85,6 +88,7 @@ export async function segmentConcept(opts: {
     });
     if (mask) {
       const b = mask.bounds;
+      rasters.push({ detectionId: id, bounds: { left: b.left, top: b.top, right: b.right, bottom: b.bottom }, raster: decodeMaskToRaster(mask.mask), width: mask.mask.width, height: mask.mask.height });
       maskOut.push({
         detectionId: id,
         // Mask raster covers `bounds` in source pixels; place it there in a
@@ -93,5 +97,5 @@ export async function segmentConcept(opts: {
       });
     }
   }
-  return { detections, masks: maskOut, diagnostics: result.diagnostics.map((d) => `${d.severity}: ${d.message}`) };
+  return { detections, masks: maskOut, rasters, diagnostics: result.diagnostics.map((d) => `${d.severity}: ${d.message}`) };
 }

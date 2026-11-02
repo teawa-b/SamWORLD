@@ -12,6 +12,7 @@ import { config, metaConfigured } from './config.js';
 import { HttpError, Id, now, parse, rateLimit } from './http.js';
 import { AiBudget } from './meta/client.js';
 import { restyleImage, surfaceTexture } from './meta/image.js';
+import { understandScan } from './objects.js';
 import { validateImage } from './providers/ingest.js';
 import { startRestyle, textureDir } from './restyle.js';
 import { fitRoomShell, parsePly } from './shared/index.js';
@@ -89,7 +90,10 @@ async function reconstruct(scan: Scan): Promise<void> {
       bounds: { min, max },
       model: reply.model ?? 'mapanything',
       timings: { ...(reply.timings ?? {}), totalSeconds: Math.round((Date.now() - t0) / 100) / 10 },
+      objects: [],
+      objectsStatus: { state: 'running', message: 'Looking for furniture…', usage: '' },
     });
+    await understandScan(scan);
   } catch (e) {
     await save({ state: 'failed', message: (e as Error).message });
   }
@@ -137,6 +141,27 @@ export async function registerRoomshiftRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/scans/:scanId', async (req) => ({ scan: requireScan((req.params as { scanId: string }).scanId) }));
+
+  /** Find the room's objects again (Muse Spark + SAM 3.1), e.g. after a failed run. */
+  app.post('/api/scans/:scanId/objects', async (req, reply) => {
+    rateLimit(req, 6);
+    const scan = requireScan((req.params as { scanId: string }).scanId);
+    if (scan.state !== 'ready') throw new HttpError(409, 'SCAN_NOT_READY', 'Reconstruct the room first');
+    if (scan.objectsStatus?.state !== 'running') {
+      scan.objectsStatus = { state: 'running', message: 'Starting…', usage: '' };
+      await store.put('scans', scan.id, scan);
+      void understandScan(scan);
+    }
+    return reply.status(202).send({ scan });
+  });
+
+  app.get('/api/scans/:scanId/objects/:objectId/crop.jpg', async (req, reply) => {
+    const { scanId, objectId } = req.params as { scanId: string; objectId: string };
+    const o = requireScan(scanId).objects?.find((x) => x.id === objectId);
+    if (!o?.crop || !existsSync(join(scanDir(scanId), o.crop))) throw new HttpError(404, 'NOT_FOUND', 'No crop for this object');
+    reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=3600');
+    return reply.send(createReadStream(join(scanDir(scanId), o.crop)));
+  });
 
   app.get('/api/scans/:scanId/cloud.ply', async (req, reply) => {
     const scan = requireScan((req.params as { scanId: string }).scanId);
