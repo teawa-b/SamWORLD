@@ -309,7 +309,15 @@ export function placeObjects(
     const notes: string[] = kind !== cand.kind ? [`${cand.kind} drawn as ${kind.replace('-', ' ')}`] : [];
 
     const attempts: { c: Vec2; rot: number; note: string }[] = [];
-    if (cand.anchor.type === 'centre') {
+    if (cand.anchor.type === 'at') {
+      // Position worked out from the photos: try it exactly, then small nudges (never a different wall).
+      const { x, z, facing } = cand.anchor;
+      const rot = rotationFacing(Math.hypot(facing[0], facing[1]) > 1e-6 ? facing : [0, 1]);
+      attempts.push({ c: [x, z], rot, note: 'where the photos show it' });
+      for (const r of [0.15, 0.3, 0.5])
+        for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, r], [r, -r], [-r, -r]] as Vec2[])
+          attempts.push({ c: [x + dx, z + dz], rot, note: `nudged ${r} m from where the photos show it` });
+    } else if (cand.anchor.type === 'centre') {
       const c = interiorPoint(room.polygonXZMeters);
       const longest = roomEdges(room.polygonXZMeters).sort((x, y) => y.len - x.len)[0];
       const rot = rotationFacing(longest.inward);
@@ -319,11 +327,12 @@ export function placeObjects(
       // The suggested wall first; if nothing fits there (Muse can misjudge the side from a photo), the
       // neighbouring walls and then the opposite one, so a bath isn't lost because its wall was misread.
       // A corner is tried along either of its walls, then the other corners.
-      const asked: WallSide = cand.anchor.type === 'against-wall' ? cand.anchor.side : cand.anchor.sides[0];
+      const anchor = cand.anchor as Exclude<PlacementCandidate['anchor'], { type: 'centre' } | { type: 'at' }>;
+      const asked: WallSide = anchor.type === 'against-wall' ? anchor.side : anchor.sides[0];
       const plan: { side: WallSide; along: number | WallSide }[] =
-        cand.anchor.type === 'against-wall'
-          ? [asked, ...FALLBACK_SIDES[asked]].map((side) => ({ side, along: (cand.anchor as { along: number }).along }))
-          : cornersFrom(cand.anchor.sides[0], cand.anchor.sides[1]);
+        anchor.type === 'against-wall'
+          ? [asked, ...FALLBACK_SIDES[asked]].map((side) => ({ side, along: anchor.along }))
+          : cornersFrom(anchor.sides[0], anchor.sides[1]);
       for (const { side, along: want } of plan) {
         const edges = edgesForSide(room.polygonXZMeters, side);
         let along = typeof want === 'number' ? want : 0.5;
@@ -357,7 +366,7 @@ export function placeObjects(
     const askedNote = attempts[0]?.note;
     const runs = placed.filter((p) => KITCHEN_RUN.has(p.kind));
     if (runs.length && (BUILT_IN.has(kind) || ON_WORKTOP.has(kind))) {
-      const askedRot = cand.anchor.type === 'centre' ? null : attempts[0]?.rot;
+      const askedRot = cand.anchor.type === 'centre' || cand.anchor.type === 'at' ? null : attempts[0]?.rot;
       const facing = (p: Placed) => (askedRot != null && Math.abs(Math.atan2(Math.sin(p.rot - askedRot), Math.cos(p.rot - askedRot))) < 0.1 ? 0 : 1);
       const inRun: typeof attempts = [];
       for (const run of [...runs].sort((a, b) => facing(a) - facing(b))) {
@@ -412,7 +421,7 @@ export function placeObjects(
     placed.push({ id: cand.id, kind, fp, y0: success.y0, y1: success.y0 + success.h, depth, c, rot: success.rot, w });
     placedByRoom.set(room.id, placed);
 
-    const slid = success.note.includes('slid') || success.note.includes('nudged') || success.note.includes('instead of');
+    const slid = success.note.includes('slid') || (success.note.includes('nudged') && cand.anchor.type !== 'at') || success.note.includes('instead of');
     objects.push({
       id: cand.id,
       roomId: room.id,

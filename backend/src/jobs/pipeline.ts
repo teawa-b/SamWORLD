@@ -41,6 +41,7 @@ import { AiBudget } from '../meta/client.js';
 import { resolveModels } from '../meta/models.js';
 import { assembleInterpretation, FloorplanUnreadableError, layoutFromPhotos, matchPhotosToRooms, parseFloorplanLevel, PROMPT_VERSIONS, furnishRooms, readRoomSurfaces, reviewAgainstPlan, suggestPlacements } from '../meta/muse.js';
 import { segmentConcept } from '../meta/sam.js';
+import { SURVEY_PROMPT_VERSION, surveyRoom } from '../meta/survey.js';
 import { FIXTURE_PROVIDER, fixtureFile, resolveStorageKey } from '../providers/fixture.js';
 import { store } from '../store.js';
 import { requestSam3d } from './sam3d.js';
@@ -138,7 +139,7 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     }
   }
   run.modelVersions = live ? { muse: config.meta.museModel, sam: config.meta.samModel } : {};
-  run.promptVersions = live ? PROMPT_VERSIONS : {};
+  run.promptVersions = live ? { ...PROMPT_VERSIONS, roomSurvey: SURVEY_PROMPT_VERSION } : {};
 
   // ---- 2. Layout: floor plan → plan among the photos → photos → listing facts ----
   let planImages = await loadPlanRasters(plans);
@@ -343,14 +344,35 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
     if (rooms.length) await ctx.log('place', `Asking Muse where the furniture goes in ${rooms.length} photographed room(s)…`);
     await pool(rooms, 3, async (room) => {
       const roomPhotos = photoData.filter((p) => room.linkedMediaIds.includes(p.media.id)).slice(0, 3);
+      const roomDets = detections.filter((d) => room.linkedMediaIds.includes(d.mediaId));
+      const photosIn = roomPhotos.map((p) => ({ mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType) }));
+      // Survey (positions from the photos, checked and corrected in rounds) when SAM outlined things in this room.
+      if (roomDets.length) {
+        try {
+          const level = structure.levels.find((l) => l.id === room.levelId);
+          const plan = planImages.find((pi) => pi.media.id === level?.originalPlanMediaId) ?? planImages[0];
+          const r = await surveyRoom({
+            budget,
+            structure,
+            roomId: room.id,
+            photos: photosIn,
+            detections: roomDets,
+            planImage: plan?.dataUrl ?? null,
+            maxRounds: 3,
+            onRound: (round, issues) => ctx.log('place', `${room.label}: survey round ${round}: ${issues.length ? `${issues.length} disagreement(s) with the photos, e.g. ${issues[0]}` : 'positions agree with every photo'}`, issues.length ? 'warn' : 'info'),
+          });
+          candidates.push(...r.candidates);
+          aiRooms.add(room.id);
+          await ctx.log('place', `${room.label}: ${r.candidates.length} item(s) placed from the photos after ${r.rounds} round(s)${r.issuesLeft.length ? `, ${r.issuesLeft.length} disagreement(s) left` : ''} (${++done}/${rooms.length})`);
+          run.progress = 0.6 + 0.15 * (done / rooms.length);
+          await ctx.save();
+          return;
+        } catch (e) {
+          await ctx.log('place', `Survey of ${room.label} failed (${(e as Error).message}); falling back to simple suggestions`, 'warn');
+        }
+      }
       try {
-        const c = await suggestPlacements({
-          budget,
-          structure,
-          roomId: room.id,
-          photos: roomPhotos.map((p) => ({ mediaId: p.media.id, dataUrl: toDataUrl(p.buf, p.media.mimeType) })),
-          detections: detections.filter((d) => room.linkedMediaIds.includes(d.mediaId)),
-        });
+        const c = await suggestPlacements({ budget, structure, roomId: room.id, photos: photosIn, detections: roomDets });
         candidates.push(...c);
         aiRooms.add(room.id);
         await ctx.log('place', `${room.label}: ${c.length} item(s) suggested (${++done}/${rooms.length})`);
@@ -395,6 +417,8 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   if (config.sam3d.enabled) {
     if (config.sam3d.requireManualApproval && !opts.sam3dApproved) {
       await ctx.log('place', 'SAM 3D enabled but this run was not manually approved; proxies kept');
+    } else if (opts.sam3dMaxObjects === 0) {
+      await ctx.log('place', 'SAM 3D skipped for this build (switched off on the review screen); stand-in shapes kept');
     } else {
       const r = await requestSam3d({ objects, detections, max: opts.sam3dMaxObjects ?? config.sam3d.maxObjectsPerRun, log: (m, l) => ctx.log('place', m, l) });
       objects = r.objects;

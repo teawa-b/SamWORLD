@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { FloorplanInterpretation, PlanLevel, polygonArea, polygonSelfIntersects, RoomHint, ExteriorFinish } from './shared/index.js';
+import { geocode } from './providers/geo.js';
+import { FloorplanInterpretation, type Property, PlanLevel, polygonArea, polygonSelfIntersects, RoomHint, ExteriorFinish } from './shared/index.js';
 import { config, metaConfigured } from './config.js';
 import { HttpError, Id, now, parse, rateLimit, requireProperty } from './http.js';
 import { flattenTransparentPng, toDataUrl } from './lib/image.js';
@@ -20,7 +21,7 @@ import { resolveModels } from './meta/models.js';
 import { resolveStorageKey } from './providers/fixture.js';
 import { addImage, addImageUrls, createUploadProperty, importFromListingUrl, IngestError, MAX_IMAGE_BYTES, realtyIdFromUrl } from './providers/ingest.js';
 import { ExtractionError } from './providers/listing-url.js';
-import { importRealty, realtyStatus } from './providers/realtyapi.js';
+import { attachFloorPlans, floorPlansElsewhere, importRealty, realtyStatus } from './providers/realtyapi.js';
 import { detectionFor, reconstructObject, sam3dReady, Sam3dUnavailableError } from './jobs/sam3d.js';
 import { store } from './store.js';
 
@@ -82,7 +83,14 @@ export async function registerImportRoutes(app: FastifyInstance) {
         await store.put('properties', id, imported.property);
         for (const m of mediaFor(id)) await store.del('media', m.id);
         for (const [i, m] of imported.media.entries()) await store.put('media', m.id, { ...m, metadata: { ...m.metadata, order: i, importedVia: 'listing-api' } });
-        return { property: imported.property, media: mediaFor(id), extraction: { adapter: `realtyapi:${known.provider}`, found: imported.media.length, floorplans: imported.media.filter((m) => m.type === 'floorplan').length, downloaded: imported.media.length, failed: [], notes: [] } };
+        const notes: string[] = [];
+        // No floor plan on this portal? The same home's listing elsewhere often has one.
+        if (!imported.media.some((m) => m.type === 'floorplan') && imported.property.location) {
+          const r = await findAndAttachPlans(imported.property).catch((e) => ({ added: 0, note: `Floor plan search elsewhere failed: ${(e as Error).message}` }));
+          notes.push(r.note);
+        }
+        const media = mediaFor(id);
+        return { property: store.get('properties', id)!, media, extraction: { adapter: `realtyapi:${known.provider}`, found: media.length, floorplans: media.filter((m) => m.type === 'floorplan').length, downloaded: media.length, failed: [], notes } };
       } catch (e) {
         req.log.warn({ err: (e as Error).message }, 'RealtyAPI import failed; trying the public page');
       }
@@ -208,6 +216,16 @@ export async function registerImportRoutes(app: FastifyInstance) {
     return { media: mediaFor(property.id), aiCalls: budget.usage.calls, model: r.provenance.model };
   });
 
+  /** Look for this home's floor plan on another portal (Realtor.com via RealtyAPI). */
+  app.post('/api/properties/:propertyId/find-floorplan', async (req) => {
+    rateLimit(req, 6);
+    const property = requireProperty((req.params as { propertyId: string }).propertyId);
+    if (!realtyStatus().available) throw new HttpError(503, 'REALTY_NOT_CONFIGURED', 'Looking up other listings needs REALTYAPI_KEY on the server.');
+    if (!property.location && !/^\d/.test(property.address)) throw new HttpError(400, 'NO_ADDRESS', 'Enter the full street address (e.g. 201 NW 61st Ave, Miami, FL 33126) first.');
+    const r = await findAndAttachPlans(property);
+    return { ...r, media: mediaFor(property.id) };
+  });
+
   // ---------------------------------------------------------------- plan editor
   app.get('/api/properties/:propertyId/interpretation', async (req) => {
     const property = requireProperty((req.params as { propertyId: string }).propertyId);
@@ -292,4 +310,21 @@ export async function registerImportRoutes(app: FastifyInstance) {
     if (!job) throw new HttpError(404, 'NOT_FOUND', 'Job not found');
     return job;
   });
+}
+
+/** Find the same home's floor plans on another portal and attach them as floor-plan media. */
+async function findAndAttachPlans(property: Property): Promise<{ added: number; foundOn: string | null; note: string }> {
+  let loc = property.location;
+  if (!loc) {
+    const g = await geocode(property.address);
+    if (g) loc = { lat: g.lat, lng: g.lng };
+  }
+  if (!loc) return { added: 0, foundOn: null, note: 'Couldn’t locate this address to look for its floor plan elsewhere.' };
+  const r = await floorPlansElsewhere(property.address, loc.lat, loc.lng);
+  if (!r.urls.length) return { added: 0, foundOn: null, note: `No floor plan found for this address on other sites (tried ${r.tried.join(', ') || 'none'}). You can add one yourself: screenshot it and drop it in.` };
+  const existing = Object.values(store.all('media')).filter((m) => m.propertyId === property.id && m.type === 'floorplan').length;
+  const added = await attachFloorPlans(property.id, r.urls, r.foundOn!, existing);
+  for (const m of added) await store.put('media', m.id, m);
+  if (!property.location) await store.put('properties', property.id, { ...property, location: loc });
+  return { added: added.length, foundOn: r.foundOn, note: added.length ? `Found ${added.length} floor plan(s) on the same home's ${r.foundOn} listing.` : `A floor plan exists on ${r.foundOn} but couldn’t be downloaded.` };
 }

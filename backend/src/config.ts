@@ -64,9 +64,10 @@ export const config = {
     falEndpoint: process.env.FAL_SAM3D_ENDPOINT ?? 'fal-ai/sam-3/3d-objects',
     endpointUrl: process.env.MODAL_ENDPOINT_URL ?? '',
     authSecret: process.env.MODAL_AUTH_SECRET ?? '',
-    maxObjectsPerRun: int(process.env.SAM3D_MAX_OBJECTS_PER_RUN, 1),
+    // Every build rebuilds up to this many photographed objects (the owner asked for all of them, automatically).
+    maxObjectsPerRun: int(process.env.SAM3D_MAX_OBJECTS_PER_RUN, 25),
     timeoutSeconds: int(process.env.SAM3D_JOB_TIMEOUT_SECONDS, 600),
-    requireManualApproval: bool(process.env.SAM3D_REQUIRE_MANUAL_APPROVAL, true),
+    requireManualApproval: bool(process.env.SAM3D_REQUIRE_MANUAL_APPROVAL, false),
   },
 
   jobs: {

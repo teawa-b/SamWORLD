@@ -428,3 +428,66 @@ export async function importRealty(provider: RealtyProvider, listingId: string, 
 }
 
 export const isRealtyProvider = (p: string): p is RealtyProvider => (REALTY_PROVIDERS as string[]).includes(p);
+
+// ---------------------------------------------------------------------------
+// Floor plans from the same home's listing on another portal
+// ---------------------------------------------------------------------------
+
+/** "201 NW 61st Ave, Miami, FL 33126" → { num: "201", street: "nw 61st" } (suffixes like Ave/Street ignored). */
+export function addressKey(a: string): { num: string; street: string } | null {
+  const first = a.toLowerCase().split(',')[0].replace(/[.#]/g, ' ').replace(/\s+/g, ' ').trim();
+  const m = first.match(/^(\d+[a-z]?)\s+(.+)$/);
+  if (!m) return null;
+  const SUFFIX = /\b(avenue|ave|street|st|road|rd|drive|dr|court|ct|lane|ln|place|pl|boulevard|blvd|terrace|ter|way|circle|cir|parkway|pkwy|highway|hwy)\b/g;
+  const street = m[2].replace(/\b(apt|unit|ste|suite)\b.*$/, '').replace(SUFFIX, '').replace(/\s+/g, ' ').trim();
+  return { num: m[1], street };
+}
+
+/**
+ * Look for the same home on Realtor.com (MLS listings there usually tag the floor plan) and return its
+ * floor-plan image URLs. Matching is by house number + street name near the given coordinates.
+ */
+export async function floorPlansElsewhere(address: string, lat: number, lng: number): Promise<{ urls: string[]; foundOn: string | null; listingId: string | null; tried: string[] }> {
+  const want = addressKey(address);
+  const tried: string[] = [];
+  if (!want || !config.realty.apiKey) return { urls: [], foundOn: null, listingId: null, tried };
+  for (const mode of ['buy', 'rent'] as ListingMode[]) {
+    tried.push(`Realtor.com (${mode === 'buy' ? 'for sale' : 'for rent'})`);
+    const hits = await searchNearby('realtor', lat, lng, mode, 0.25).catch(() => []);
+    const same = hits.find((h) => {
+      const k = addressKey(h.address);
+      return k && k.num === want.num && (k.street === want.street || k.street.includes(want.street) || want.street.includes(k.street));
+    });
+    if (!same) continue;
+    const d = await details('realtor', same.listingId).catch(() => null);
+    console.log(`[realty] floor-plan lookup: ${address} matched Realtor.com ${same.listingId} (${same.address}); ${d?.floorPlans.length ?? 0} floor plan(s)`);
+    if (d?.floorPlans.length) return { urls: d.floorPlans.slice(0, 4), foundOn: 'Realtor.com', listingId: same.listingId, tried };
+  }
+  console.log(`[realty] floor-plan lookup: no floor plan found elsewhere for ${address} (tried ${tried.join(', ')})`);
+  return { urls: [], foundOn: null, listingId: null, tried };
+}
+
+/** Download floor plans found elsewhere and attach them to a property. */
+export async function attachFloorPlans(propertyId: string, urls: string[], foundOn: string, offset = 0): Promise<PropertyMedia[]> {
+  const out: PropertyMedia[] = [];
+  for (const [i, url] of urls.entries()) {
+    const name = `floorplan-x${offset + i}-${createHash('sha1').update(url).digest('hex').slice(0, 8)}`;
+    const saved = await download(url, propertyId, name).catch(() => null);
+    if (!saved) continue;
+    out.push({
+      id: `${propertyId}-floorplan-x${offset + i}`,
+      propertyId,
+      type: 'floorplan',
+      storageKey: saved.key,
+      mimeType: saved.mime,
+      sourceUrl: url,
+      pageOrFrame: null,
+      captureDate: null,
+      levelGuess: `L${offset + i}`,
+      roomGuess: null,
+      usageRightsStatus: 'licensed',
+      metadata: { provider: 'realtor', foundOn, order: -10 + i, importEvidence: `Floor plan from the same home's ${foundOn} listing` },
+    });
+  }
+  return out;
+}

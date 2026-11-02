@@ -150,6 +150,7 @@ export const api = {
   reorderMedia: (propertyId: string, mediaIds: string[]) => call<{ media: PropertyMedia[] }>(`/api/properties/${propertyId}/media-order`, { method: 'PUT', body: JSON.stringify({ mediaIds }) }),
   updateProperty: (propertyId: string, patch: { address?: string; bedrooms?: number | null; bathrooms?: number | null; floors?: number | null; areaSqM?: number | null; roomHints?: RoomHint[]; hallway?: boolean | null; exterior?: Property['exterior']; useFootprint?: boolean }) =>
     call<{ property: Property }>(`/api/properties/${propertyId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  findFloorPlan: (propertyId: string) => call<{ added: number; foundOn: string | null; note: string; media: PropertyMedia[] }>(`/api/properties/${propertyId}/find-floorplan`, { method: 'POST', body: '{}' }),
   suggestRooms: (propertyId: string) => call<{ media: PropertyMedia[]; aiCalls: number; model: string }>(`/api/properties/${propertyId}/media/suggest`, { method: 'POST', body: '{}' }),
   interpretation: (propertyId: string) => call<{ interpretation: FloorplanInterpretation | null }>(`/api/properties/${propertyId}/interpretation`),
   saveInterpretation: (propertyId: string, levels: PlanLevel[]) =>

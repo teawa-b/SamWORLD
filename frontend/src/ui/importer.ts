@@ -45,7 +45,7 @@ export class ImportFlow {
   busy: string | null = null;
   private rights = false;
   /** Real furniture from the photos (SAM 3D): off unless ticked; how many items at most. */
-  sam3d = { on: false, max: 8 };
+  sam3d = { on: true, max: 25 };
   private urlDraft = '';
   private importError: string | null = null;
 
@@ -100,7 +100,7 @@ export class ImportFlow {
     const groupKeys = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
     const traced = this.interp && this.interp.layoutSource === 'floorplan';
     const planNote = !plans.length
-      ? `<div class="callout">${icon('info')}<div><b>No floor plan.</b> Without one, room positions are an estimate. Mark an image as a floor plan, or add one.</div></div>`
+      ? `<div class="callout">${icon('info')}<div><b>No floor plan.</b> The floor plan gives the real layout and room sizes, so it matters most. ${caps?.realtyApi ? 'WalkIn can look for this home’s plan on its other listings (Realtor.com). ' : ''}Or screenshot the plan from the listing and drop it in, then mark it as a floor plan.${caps?.realtyApi ? `<br/><button class="btn small" data-action="find-plan" style="margin-top:8px" ${this.busy ? 'disabled' : ''}>${icon('search', 16)}${this.busy === 'find-plan' ? 'Looking…' : 'Look for the floor plan on other sites'}</button>` : ''}</div></div>`
       : traced
         ? `<div class="callout ok">${icon('check')}<div><b>Floor plan ${this.interp!.provenance.method === 'admin-correction' ? 'traced' : 'read'}:</b> ${this.interp!.levels.reduce((n, l) => n + l.rooms.length, 0)} rooms on ${this.interp!.levels.length} floor(s) (${esc(this.interp!.provenance.method === 'admin-correction' ? 'by hand' : this.interp!.provenance.method)}). <a href="#" data-action="edit-plan">Check or edit it</a></div></div>`
         : caps?.liveMeta
@@ -166,7 +166,7 @@ export class ImportFlow {
       ${this.renderExterior()}
       ${caps?.sam3d ? `<div class="card sam3d-opt">
         <label class="switch"><input type="checkbox" data-sam3d-on ${this.sam3d.on ? 'checked' : ''} /><b>Build real furniture from the photos (SAM 3D${caps.sam3dProvider ? ` on ${esc(caps.sam3dProvider)}` : ''})</b></label>
-        <p class="xs muted">After SAM 3.1 finds each piece of furniture in the photos, SAM 3D turns the biggest ones into textured 3D models of the actual items. Without this, furniture is shown as simple stand-in shapes. Paid per item on your ${esc(caps.sam3dProvider ?? 'GPU')} account; results are cached so rebuilding doesn't pay again.</p>
+        <p class="xs muted">On by default: after SAM 3.1 finds each piece of furniture in the photos, SAM 3D turns every one of them (up to the limit) into a textured 3D model of the actual item. Untick to keep simple stand-in shapes. Paid per item on your ${esc(caps.sam3dProvider ?? 'GPU')} account; results are cached so rebuilding doesn't pay again.</p>
         <label class="xs muted">Up to <input class="field small" style="width:70px;display:inline-block" type="number" min="1" max="25" data-sam3d-max value="${this.sam3d.max}" /> items</label>
       </div>` : ''}
       <div class="sticky-cta">
@@ -426,6 +426,19 @@ export class ImportFlow {
         }
         this.host.openPlanEditor(pid);
         return true;
+      case 'find-plan': {
+        this.busy = 'find-plan';
+        this.host.rerender();
+        try {
+          const r = await api.findFloorPlan(pid);
+          this.media = sortMedia(r.media);
+          this.host.toast(r.note);
+        } finally {
+          this.busy = null;
+          this.host.rerender();
+        }
+        return true;
+      }
       case 'hint-link': {
         // Cycle: none → door → open-plan → none. Stored once, on the first room.
         const a = el.dataset.a!;
@@ -443,7 +456,7 @@ export class ImportFlow {
       }
       case 'generate':
         await this.saveFacts();
-        await this.host.startBuild(pid, this.sam3d.on ? { sam3dApproved: true, sam3dMaxObjects: this.sam3d.max } : {});
+        await this.host.startBuild(pid, this.sam3d.on ? { sam3dApproved: true, sam3dMaxObjects: this.sam3d.max } : { sam3dMaxObjects: 0 });
         return true;
     }
     return false;
