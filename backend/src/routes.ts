@@ -1,4 +1,7 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
+import { shrinkGlb } from './lib/glb.js';
 import { lastResolution } from './meta/models.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
@@ -266,6 +269,17 @@ export async function registerRoutes(app: FastifyInstance) {
     if (!/^[a-f0-9]{24}\.(glb|ply)$/.test(file)) throw new HttpError(400, 'BAD_REQUEST', 'Invalid file');
     const abs = resolveStorageKey(`sam3d/${file}`);
     if (!abs) throw new HttpError(404, 'NOT_FOUND', 'Not found');
+    if (file.endsWith('.glb')) {
+      // Smaller texture + 16-bit indices, gzipped (~1.4 MB → ~0.35 MB); made once, next to the original.
+      const small = `${abs}.s1.gz`;
+      try {
+        if (!existsSync(small)) await writeFile(small, await promisify(gzip)(shrinkGlb(await readFile(abs)), { level: 9 }));
+        reply.header('content-type', 'model/gltf-binary').header('content-encoding', 'gzip').header('cache-control', 'public, max-age=31536000, immutable');
+        return reply.send(createReadStream(small));
+      } catch {
+        // Fall through to the original file.
+      }
+    }
     return sendFile(reply, abs, file.endsWith('.glb') ? 'model/gltf-binary' : 'application/octet-stream');
   });
 
