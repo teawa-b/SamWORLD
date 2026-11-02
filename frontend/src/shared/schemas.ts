@@ -323,6 +323,8 @@ export const PlacementCandidate = z.object({
     z.object({ type: z.literal('against-wall'), side: WallSide, along: z.number().min(0).max(1) }),
     z.object({ type: z.literal('centre') }),
     z.object({ type: z.literal('corner'), sides: z.tuple([WallSide, WallSide]) }),
+    /** Exact plan position (metres) worked out from the photos; `facing` is the direction its front points. */
+    z.object({ type: z.literal('at'), x: z.number(), z: z.number(), facing: Vec2 }),
   ]),
   /** Estimated footprint (width along wall, depth into room, height). */
   sizeM: Vec3,
