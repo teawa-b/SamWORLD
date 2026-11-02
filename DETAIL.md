@@ -120,8 +120,10 @@ video ─► frames (browser) ─► [1 SCAN] MapAnything (Modal GPU) ─► cam
 - [x] Structure fitting (floor/ceiling/walls) + viewer showing the scan — `shared/room-shell.ts`, `scene/roomshift-scene.ts`
 - [x] Objects: SAM 3.1 keyframes → 3D boxes; Muse names/merges — `objects.ts` + `shared/scan-objects.ts` (cloud projected into each keyframe with a z-buffer, shell points dropped, min-area box, merged by shared points); [ ] check on a real scan with the live key
 - [x] Plan (Muse Spark) → paint surfaces (Muse Image textures) — `restyle.ts`
-- [ ] Paint objects: restyle each object's crop (Muse Image) → SAM 3D → GLB in its box
-- [ ] Progressive reveal
+- [x] Paint objects: restyle each object's crop (Muse Image) → SAM 3D → GLB in its box — first live world: 7/8 pieces in 2 min 39 s
+- [x] Fuller room: photo base coat on the shell, 1 cm voxel cloud (1M points), compact download (15 MB → 3–4 MB)
+- [ ] Doors and windows: find them with SAM 3.1 and keep them in painted walls
+- [x] Progressive reveal (paint spreads per surface; furniture grows into place)
 
 **Wed 4 Nov**
 - [ ] Quest VR pass (1:1), polish, cache a demo room, record the video, submit by 9 PM ET

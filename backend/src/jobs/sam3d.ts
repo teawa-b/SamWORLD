@@ -60,6 +60,8 @@ interface ProviderInput {
   imageDataUrl: string;
   box: Detection['box'];
   maskSvg: string | null;
+  /** fal only: send no box prompt and let SAM find the object from the label alone. */
+  noBox?: boolean;
 }
 
 async function callModal(i: ProviderInput): Promise<WorkerReply> {
@@ -119,7 +121,7 @@ async function callFal(i: ProviderInput): Promise<WorkerReply> {
   const size = imageSize(buf);
   const [x0, y0, x1, y1] = i.box;
   const input: Record<string, unknown> = { image_url: imageUrl, prompt: i.category, export_textured_glb: true };
-  if (size) {
+  if (size && !i.noBox) {
     const W = size.width;
     const H = size.height;
     const xm = Math.max(0, Math.min(W - 2, Math.round(x0 * W)));
@@ -286,11 +288,16 @@ export async function liftImage(opts: { id: string; label: string; image: Buffer
   if (!reply) {
     // The restyled crop is centred on the object: prompt with a box over most of the image.
     const input = { objectId: opts.id, category: opts.label, mediaId: opts.id, imageDataUrl: `data:${opts.mime};base64,${opts.image.toString('base64')}`, box: [0.04, 0.04, 0.96, 0.96] as Detection['box'], maskSvg: null };
-    try {
-      reply = ready.provider === 'fal' ? await callFal(input) : await callModal(input);
-    } catch (e) {
-      reply = { status: 'error', objectId: opts.id, diagnostics: [(e as Error).message] };
-    }
+    const call = async (i: typeof input & { noBox?: boolean }): Promise<WorkerReply> => {
+      try {
+        return ready.provider === 'fal' ? await callFal(i) : await callModal(i);
+      } catch (e) {
+        return { status: 'error', objectId: opts.id, diagnostics: [(e as Error).message] };
+      }
+    };
+    reply = await call(input);
+    // fal rejects a box prompt whose segmentation came out tiny ("at least 2x2"): let SAM find it unprompted.
+    if (reply.status === 'error' && (reply.diagnostics ?? []).some((d) => /2x2|bounding box/i.test(d))) reply = await call({ ...input, noBox: true });
     if (reply.status === 'ok' && reply.assetBase64) {
       const file = `${hash.slice(0, 24)}.${reply.format === 'glb' ? 'glb' : 'ply'}`;
       await mkdir(join(config.dataDir, 'sam3d'), { recursive: true });
