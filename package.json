@@ -10,6 +10,8 @@
     "sync-shared": "node scripts/sync-shared.mjs",
     "check-shared": "node scripts/sync-shared.mjs --check",
     "test": "npm --prefix backend test && node scripts/sync-shared.mjs --check",
-    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck"
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck",
+    "deploy:scan": "node scripts/deploy-mapanything.mjs",
+    "fake-scan": "node scripts/fake-mapanything.mjs"
   }
 }

@@ -7,12 +7,13 @@ import { resetOrbit, WalkthroughSystem } from './systems/walkthrough.js';
 import { installObjectPicking } from './systems/objects.js';
 import { icon } from './ui/icons.js';
 import { RoomshiftPanel } from './ui/roomshift.js';
+import { RoomshiftSystem } from './scene/roomshift-scene.js';
 import { Sheet } from './ui/sheet.js';
 import './ui/styles.css';
 
 const world = await World.create(document.getElementById('scene-container') as HTMLDivElement, projectOptions);
 if (import.meta.env.DEV) (window as unknown as { __walkin: unknown }).__walkin = { world, app };
-world.registerSystem(DollhouseSystem).registerSystem(WalkthroughSystem).registerSystem(MenuSystem);
+world.registerSystem(DollhouseSystem).registerSystem(WalkthroughSystem).registerSystem(MenuSystem).registerSystem(RoomshiftSystem);
 installObjectPicking(world);
 
 // Rebuild the 3D house whenever a new scene manifest arrives.
@@ -40,11 +41,11 @@ effect(() => {
 
 document.querySelector('#topbar .logo')!.innerHTML = icon('roof', 14);
 
-// VR/AR is out of the main desktop journey for now. The WebXR systems are kept;
-// set VITE_ENABLE_XR=true at build time to offer the VR button again.
+// Roomshift re-enables the VR button (DETAIL.md): the scanned room is in metres with its centre at the
+// origin, so entering VR stands you in the middle of your room at 1:1. VITE_ENABLE_XR=false hides it.
 const xrButton = document.getElementById('enter-xr') as HTMLButtonElement;
 xrButton.innerHTML = `${icon('headset', 18)}VR`;
-if (import.meta.env.VITE_ENABLE_XR === 'true')
+if (import.meta.env.VITE_ENABLE_XR !== 'false')
   navigator.xr
     ?.isSessionSupported(SessionMode.ImmersiveVR)
     .then((ok) => (xrButton.hidden = !ok))

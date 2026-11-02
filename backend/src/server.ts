@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { pathToFileURL } from 'node:url';
 import cors from '@fastify/cors';
 import { capabilities, config } from './config.js';
 import { recoverStaleRuns, startRunner } from './jobs/runner.js';
@@ -14,7 +15,8 @@ export async function buildApp() {
   return app;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compare as file URLs so this also works on Windows (C:\… vs file:///C:/…).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await store.load();
   const app = await buildApp();
   if (config.workerInline) {

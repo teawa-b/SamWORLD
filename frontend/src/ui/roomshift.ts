@@ -1,15 +1,18 @@
 /**
- * Roomshift UI (step 1 of DETAIL.md): capture a room → MapAnything → see it in 3D at real scale.
- * The prompt → repaint steps plug in after this.
+ * Roomshift UI (DETAIL.md): capture a room → MapAnything → your room in 3D at real scale → type a world →
+ * Muse Spark plans it → Muse Image paints walls, floor and ceiling, spreading across the room as each lands.
  */
 import type { World } from '@iwsdk/core';
-import { BufferGeometry, Float32BufferAttribute, Group, Points, PointsMaterial } from 'three';
-import { parsePly } from '../shared/index.js';
+import type { RoomShell } from '../shared/index.js';
+import { RoomScene, paintOrigin, type SurfaceId } from '../scene/roomshift-scene.js';
+import { app } from '../state.js';
+import { enterScanWalk, exitRoom, focusOrbit } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
-import { focusOrbit } from '../systems/walkthrough.js';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+const EXAMPLES = ['haunted Victorian library', 'underwater coral cave', '1970s Tokyo arcade', 'enchanted forest cabin', 'spaceship bridge', 'Egyptian tomb'];
 
 interface Scan {
   id: string;
@@ -22,6 +25,26 @@ interface Scan {
   cameras: unknown[];
   timings: Record<string, number>;
   model: string | null;
+  shell?: RoomShell | null;
+}
+
+interface Restyle {
+  id: string;
+  prompt: string;
+  state: 'planning' | 'painting' | 'done' | 'failed';
+  message: string;
+  offline: boolean;
+  plan: {
+    title: string;
+    brief: string;
+    surfaces: Record<SurfaceId, { prompt: string; colorHex: string; tileMetres: number }>;
+    light: { colorHex: string; intensity: number };
+    fogHex: string;
+  } | null;
+  surfaces: { id: SurfaceId; state: 'pending' | 'running' | 'done' | 'failed'; texture: string | null; model: string | null; error: string | null; seconds: number | null }[];
+  models: string[];
+  usage: string;
+  createdAt: string;
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -30,6 +53,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) throw new Error(body?.error?.message ?? res.statusText);
   return body as T;
 }
+const postJson = <T>(path: string, body: unknown) => call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 /** ~1.5 frames per second of video (12–40 frames), longest side ≤ 1024 px, as JPEG blobs. */
 export async function framesFromVideo(file: File, onProgress: (n: number, total: number) => void): Promise<Blob[]> {
@@ -65,16 +89,35 @@ export class RoomshiftPanel {
   private scan: Scan | null = null;
   private status = '';
   private busy = false;
-  private cloud: Group | null = null;
   private poll: number | null = null;
+  private rpoll: number | null = null;
+  private room: RoomScene;
+  private restyle: Restyle | null = null;
+  private history: Restyle[] = [];
+  private origin: ReturnType<typeof paintOrigin> | null = null;
+  private phase = '';
+  private prompt = '';
+  private error = '';
 
   constructor(
     private world: World,
     root: HTMLElement,
   ) {
     this.body = root.querySelector('#panel-body') as HTMLElement;
+    this.room = new RoomScene(world);
     this.body.addEventListener('change', (e) => void this.onChange(e));
     this.body.addEventListener('click', (e) => void this.onClick(e));
+    this.body.addEventListener('input', (e) => {
+      const el = e.target as HTMLInputElement;
+      if (el.id === 'rs-prompt') this.prompt = el.value;
+    });
+    this.body.addEventListener('submit', (e) => {
+      e.preventDefault();
+      void this.shift(this.prompt);
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && app.mode.value === 'walk') this.leaveWalk();
+    });
   }
 
   async start() {
@@ -86,7 +129,21 @@ export class RoomshiftPanel {
     this.render();
   }
 
+  // ------------------------------------------------------------------------------------------ rendering
+
+  /** Full render when the screen changes; otherwise only the live part, so typing isn't interrupted. */
   private render() {
+    const s = this.scan;
+    const phase = !s || s.state === 'collecting' ? `capture:${this.busy}` : s.state;
+    if (phase !== this.phase || !this.body.querySelector('#rs-live')) {
+      this.phase = phase;
+      this.renderAll();
+    }
+    const live = this.body.querySelector('#rs-live');
+    if (live) live.innerHTML = this.liveHtml();
+  }
+
+  private renderAll() {
     const s = this.scan;
     const brand = `<div class="desktop-brand"><span class="logo">${icon('cube', 18)}</span>Roomshift</div>`;
     if (!s || s.state === 'collecting') {
@@ -94,21 +151,77 @@ export class RoomshiftPanel {
         <div class="eyebrow">Step 1 · Scan your room</div>
         <h1>Type a world. Your room becomes it.</h1>
         <p class="lede">Film a slow 20–40 second walk around a room, holding your phone at chest height and turning to see every wall. Meta’s MapAnything rebuilds it in 3D at its real size.</p>
-        <div class="drop" data-action="pick" tabindex="0" role="button">${icon('photo', 26)}<b>${this.busy ? esc(this.status) : 'Choose a video (or 15–40 photos)'}</b><span class="xs muted">MP4/MOV video, or JPG/PNG/WebP photos with lots of overlap</span></div>
+        <div id="rs-live"></div>
         <input type="file" id="capture" accept="video/*,image/jpeg,image/png,image/webp" multiple hidden />
-        ${this.status && !this.busy ? `<div class="callout">${icon('alert')}<div>${esc(this.status)}</div></div>` : ''}
         <p class="xs faint" style="margin-top:14px">Frames are taken from the video in your browser; only those stills are uploaded.</p>`;
       return;
     }
-    const sec = (k: string) => (s.timings[k] != null ? `${s.timings[k]} s` : '—');
-    this.body.innerHTML = `${brand}
-      <div class="view-head"><button class="icon-btn" data-action="new" aria-label="New scan">${icon('back')}</button><div class="grow"><div class="sub">${esc(s.title)} · ${s.frames.length} frames</div></div></div>
-      ${s.state === 'reconstructing' ? `<div class="hint">${icon('cube')}<span>${esc(s.message)}</span></div><div class="progress"><div style="width:60%" class="indeterminate"></div></div>` : ''}
-      ${s.state === 'failed' ? `<div class="callout">${icon('alert')}<div><b>Reconstruction failed.</b> ${esc(s.message)}</div></div><button class="btn block" data-action="retry">Try again</button>` : ''}
-      ${s.state === 'ready' ? `<h2>Your room in 3D</h2><p class="small muted">${esc(s.message)}</p>
-        <ul class="flags"><li><span>Model</span><span>${esc(s.model)}</span></li><li><span>GPU time</span><span>${sec('inferSeconds')}</span></li><li><span>Total</span><span>${sec('totalSeconds')}</span></li><li><span>Points</span><span>${s.cloud?.points.toLocaleString()}</span></li></ul>
-        <p class="xs faint">Drag to orbit, scroll to zoom. Next: type a world and watch the room repaint.</p>` : ''}`;
+    const head = `${brand}<div class="view-head"><button class="icon-btn" data-action="new" aria-label="New scan">${icon('back')}</button><div class="grow"><div class="sub">${esc(s.title)} · ${s.frames.length} frames</div></div></div>`;
+    if (s.state !== 'ready') {
+      this.body.innerHTML = `${head}<div id="rs-live"></div>`;
+      return;
+    }
+    this.body.innerHTML = `${head}
+      <div class="eyebrow">Step 2 · Type a world</div>
+      <h2 style="margin:6px 0 10px">What should your room become?</h2>
+      <form class="row-input" id="rs-form" autocomplete="off">
+        <input class="field" id="rs-prompt" placeholder="e.g. haunted Victorian library" maxlength="300" value="${esc(this.prompt)}" />
+        <button class="btn primary" type="submit">${icon('sparkle', 16)}Shift</button>
+      </form>
+      <div class="scroller" style="margin-top:10px">${EXAMPLES.map((x) => `<button class="chip" data-action="example" data-prompt="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+      <div id="rs-live"></div>`;
   }
+
+  private liveHtml(): string {
+    const s = this.scan;
+    if (!s || s.state === 'collecting')
+      return `<div class="drop" data-action="pick" tabindex="0" role="button">${icon('photo', 26)}<b>${this.busy ? esc(this.status) : 'Choose a video (or 15–40 photos)'}</b><span class="xs muted">MP4/MOV video, or JPG/PNG/WebP photos with lots of overlap</span></div>
+        ${this.status && !this.busy ? `<div class="callout">${icon('alert')}<div>${esc(this.status)}</div></div>` : ''}`;
+    if (s.state === 'reconstructing') return `<div class="hint">${icon('cube')}<span>${esc(s.message)}</span></div><div class="progress"><div style="width:60%" class="indeterminate"></div></div>`;
+    if (s.state === 'failed') return `<div class="callout">${icon('alert')}<div><b>Reconstruction failed.</b> ${esc(s.message)}</div></div><button class="btn block" data-action="retry">Try again</button>`;
+
+    const sec = (k: string) => (s.timings[k] != null ? `${s.timings[k]} s` : '—');
+    const sh = s.shell;
+    const walking = app.mode.value === 'walk';
+    const r = this.restyle;
+    const steps = r
+      ? `<div class="card" style="padding:12px 14px;margin:14px 0">
+          <div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(r.plan?.title ?? r.prompt)}</b>${r.offline ? '<span class="tag warn">offline placeholder</span>' : ''}</div>
+          ${r.plan?.brief ? `<p class="small muted" style="margin:4px 0 0">${esc(r.plan.brief)}</p>` : ''}
+          <ul class="steps" style="margin:8px 0 0">
+            ${stepLi(r.plan ? 'done' : r.state === 'failed' ? 'failed' : 'active', `Plan${r.offline ? '' : ' · Muse Spark'}`)}
+            ${r.surfaces.map((x) => stepLi(x.state === 'done' ? 'done' : x.state === 'failed' ? 'failed' : x.state === 'running' ? 'active' : '', `${cap(x.id)}${x.seconds != null && x.state === 'done' ? ` · ${x.seconds} s` : ''}`, x.error)).join('')}
+          </ul>
+          ${r.state === 'failed' || r.surfaces.some((x) => x.state === 'failed') ? `<p class="xs error-text" style="margin:6px 0 0">${esc(r.message)}</p>` : ''}
+          ${r.offline ? `<p class="xs faint" style="margin:6px 0 0">MODEL_API_KEY isn’t set on the backend, so these are local stand-ins, not Muse output.</p>` : ''}
+        </div>`
+      : '';
+    const past = this.history.filter((h) => h.state === 'done' && h.id !== r?.id);
+    return `
+      ${this.error ? `<div class="callout">${icon('alert')}<div>${esc(this.error)}</div></div>` : ''}
+      ${sh?.fallback ? `<div class="callout">${icon('alert')}<div><b>Couldn’t find the room’s walls.</b> Showing the raw scan; repainting needs walls and a floor. Try a slower video that sees every wall and some floor.</div></div>` : ''}
+      ${steps}
+      <div class="review-actions">
+        ${sh && !sh.fallback ? `<button class="btn small" data-action="walk">${icon(walking ? 'cube' : 'walk', 16)}${walking ? 'Back to overview' : 'Walk inside'}</button>` : ''}
+        ${r ? `<button class="btn small" data-action="original">${icon('reset', 16)}Show original</button>` : ''}
+      </div>
+      ${walking ? '<p class="xs faint">Drag to look, WASD or arrow keys to move, Esc to leave.</p>' : '<p class="xs faint">Drag to orbit, scroll to zoom.</p>'}
+      ${past.length ? `<div class="level-label">Earlier worlds</div><div class="scroller">${past.map((h) => `<button class="chip" data-action="replay" data-id="${esc(h.id)}">${esc(h.plan?.title ?? h.prompt)}</button>`).join('')}</div>` : ''}
+      <details style="margin-top:16px"><summary class="small muted" style="cursor:pointer">Scan details</summary>
+        <p class="small muted">${esc(s.message)}</p>
+        <ul class="flags">
+          <li><span>Model</span><span>${esc(s.model)}</span></li>
+          ${sh && !sh.fallback ? `<li><span>Room</span><span>${sh.size.width.toFixed(2)} × ${sh.size.depth.toFixed(2)} × ${sh.size.height.toFixed(2)} m</span></li><li><span>Walls seen</span><span>${sh.walls.filter((w) => !w.inferred).length}/4${sh.ceilingInferred ? ' · ceiling assumed' : ''}</span></li>` : ''}
+          <li><span>GPU time</span><span>${sec('inferSeconds')}</span></li>
+          <li><span>Total</span><span>${sec('totalSeconds')}</span></li>
+          <li><span>Points</span><span>${s.cloud?.points.toLocaleString()}</span></li>
+          ${r?.usage ? `<li><span>Meta API</span><span>${esc(r.usage)}</span></li>` : ''}
+        </ul>
+        ${sh?.diagnostics.length ? `<ul class="logs">${sh.diagnostics.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
+      </details>`;
+  }
+
+  // ------------------------------------------------------------------------------------------ events
 
   private async onChange(e: Event) {
     const el = e.target as HTMLInputElement;
@@ -124,15 +237,16 @@ export class RoomshiftPanel {
         frames = files.filter((f) => f.type.startsWith('image/')).slice(0, 60);
         if (frames.length < 4) throw new Error('Choose a video, or at least 4 photos.');
       }
-      const { scan } = await call<{ scan: Scan }>('/api/scans', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: files[0].name.replace(/\.[^.]+$/, '') }) });
+      const { scan } = await postJson<{ scan: Scan }>('/api/scans', { title: files[0].name.replace(/\.[^.]+$/, '') });
       for (const [i, b] of frames.entries()) {
         this.setStatus(`Uploading frames… ${i + 1}/${frames.length}`);
         await call(`/api/scans/${scan.id}/frames`, { method: 'POST', headers: { 'content-type': b.type || 'image/jpeg' }, body: b });
       }
       this.setStatus('Starting MapAnything…');
-      this.scan = (await call<{ scan: Scan }>(`/api/scans/${scan.id}/reconstruct`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).scan;
       history.replaceState(null, '', `?scan=${scan.id}`);
+      this.scan = (await postJson<{ scan: Scan }>(`/api/scans/${scan.id}/reconstruct`, {})).scan;
       this.busy = false;
+      this.status = '';
       this.follow();
     } catch (err) {
       this.busy = false;
@@ -152,24 +266,68 @@ export class RoomshiftPanel {
     const a = t.dataset.action;
     if (a === 'pick') (this.body.querySelector('#capture') as HTMLInputElement).click();
     if (a === 'new') {
+      this.stopPolls();
+      if (app.mode.value === 'walk') exitRoom(this.world);
       this.scan = null;
+      this.restyle = null;
+      this.history = [];
       this.status = '';
-      this.clearCloud();
+      this.room.clear();
       history.replaceState(null, '', location.pathname);
       this.render();
     }
     if (a === 'retry' && this.scan) {
       try {
-        this.scan = (await call<{ scan: Scan }>(`/api/scans/${this.scan.id}/reconstruct`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).scan;
+        this.scan = (await postJson<{ scan: Scan }>(`/api/scans/${this.scan.id}/reconstruct`, {})).scan;
         this.follow();
       } catch (err) {
         this.scan!.message = (err as Error).message;
       }
       this.render();
     }
+    if (a === 'example') {
+      this.prompt = t.dataset.prompt ?? '';
+      const input = this.body.querySelector('#rs-prompt') as HTMLInputElement | null;
+      if (input) input.value = this.prompt;
+      void this.shift(this.prompt);
+    }
+    if (a === 'walk') {
+      if (app.mode.value === 'walk') this.leaveWalk();
+      else {
+        // Start near one end, looking down the room's length.
+        const sh = this.scan?.shell;
+        enterScanWalk(this.world, this.room.wallSegments(), [0, sh ? Math.max(0, sh.size.depth / 2 - 0.6) : 0]);
+        this.render();
+      }
+    }
+    if (a === 'original') {
+      if (this.rpoll) clearInterval(this.rpoll);
+      this.rpoll = null;
+      this.restyle = null;
+      this.room.reset();
+      this.render();
+    }
+    if (a === 'replay') {
+      const h = this.history.find((x) => x.id === t.dataset.id);
+      if (h) {
+        this.room.reset();
+        this.origin = paintOrigin(this.world, this.scan?.shell ?? null);
+        this.restyle = h;
+        this.apply(h);
+        this.render();
+      }
+    }
   }
 
-  /** Poll the scan until it is ready, then show the point cloud. */
+  private leaveWalk() {
+    exitRoom(this.world);
+    this.frameRoom();
+    this.render();
+  }
+
+  // ------------------------------------------------------------------------------------------ scan
+
+  /** Poll the scan until it is ready, then show the room. */
   private follow() {
     if (this.poll) clearInterval(this.poll);
     const tick = async () => {
@@ -178,7 +336,7 @@ export class RoomshiftPanel {
       if (this.scan.state !== 'reconstructing') {
         clearInterval(this.poll!);
         this.poll = null;
-        if (this.scan.state === 'ready') await this.showCloud();
+        if (this.scan.state === 'ready') await this.showRoom();
       }
       this.render();
     };
@@ -186,25 +344,84 @@ export class RoomshiftPanel {
     this.poll = window.setInterval(tick, 2000);
   }
 
-  private clearCloud() {
-    this.cloud?.removeFromParent();
-    this.cloud = null;
-  }
-
-  private async showCloud() {
+  private async showRoom() {
     const s = this.scan!;
     const buf = await (await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
-    const pc = parsePly(buf, { maxPoints: 600_000 });
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new Float32BufferAttribute(pc.positions, 3));
-    geo.setAttribute('color', new Float32BufferAttribute(pc.colors, 3));
-    this.clearCloud();
-    this.cloud = new Group();
-    this.cloud.name = 'ScanCloud';
-    this.cloud.add(new Points(geo, new PointsMaterial({ size: 0.012, vertexColors: true })));
-    this.world.scene.add(this.cloud);
-    const b = s.bounds!;
-    const c: [number, number, number] = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
-    focusOrbit(this.world, c, Math.max(b.max[0] - b.min[0], b.max[2] - b.min[2], 2));
+    this.room.load(buf, s.shell);
+    this.frameRoom();
+    // Bring back the most recent finished world for this room.
+    this.history = (await call<{ restyles: Restyle[] }>(`/api/scans/${s.id}/restyles`).catch(() => ({ restyles: [] }))).restyles;
+    const last = this.history.find((h) => h.state === 'done');
+    if (last && !this.restyle) {
+      this.origin = paintOrigin(this.world, s.shell ?? null);
+      this.restyle = last;
+      this.apply(last);
+    }
   }
+
+  private frameRoom() {
+    const f = this.room.frame();
+    focusOrbit(this.world, f.target, f.span);
+  }
+
+  // ------------------------------------------------------------------------------------------ restyle
+
+  private async shift(prompt: string) {
+    prompt = prompt.trim();
+    if (!this.scan || prompt.length < 2) return;
+    this.error = '';
+    try {
+      const { restyle } = await postJson<{ restyle: Restyle }>(`/api/scans/${this.scan.id}/restyles`, { prompt });
+      this.room.reset();
+      this.origin = paintOrigin(this.world, this.scan.shell ?? null);
+      this.restyle = restyle;
+      this.followRestyle(restyle.id);
+    } catch (err) {
+      this.error = (err as Error).message;
+    }
+    this.render();
+  }
+
+  private followRestyle(id: string) {
+    if (this.rpoll) clearInterval(this.rpoll);
+    const tick = async () => {
+      const r = (await call<{ restyle: Restyle }>(`/api/restyles/${id}`).catch(() => null))?.restyle;
+      if (!r || this.restyle?.id !== id) return;
+      this.restyle = r;
+      this.apply(r);
+      if (r.state === 'done' || r.state === 'failed') {
+        clearInterval(this.rpoll!);
+        this.rpoll = null;
+        this.history = [r, ...this.history.filter((h) => h.id !== r.id)];
+      }
+      this.render();
+    };
+    void tick();
+    this.rpoll = window.setInterval(tick, 1200);
+  }
+
+  /** Push whatever has arrived into the 3D room (idempotent). */
+  private apply(r: Restyle) {
+    if (!r.plan) return;
+    this.room.mood(r.plan.light, r.plan.fogHex);
+    const from = this.origin ?? paintOrigin(this.world, this.scan?.shell ?? null);
+    for (const s of r.surfaces) {
+      if (s.state !== 'done' || !s.texture) continue;
+      const spec = r.plan.surfaces[s.id];
+      void this.room.paint({ id: s.id, url: `${BASE}/api/textures/${s.texture}`, tileMetres: spec.tileMetres, colorHex: spec.colorHex }, from);
+    }
+  }
+
+  private stopPolls() {
+    if (this.poll) clearInterval(this.poll);
+    if (this.rpoll) clearInterval(this.rpoll);
+    this.poll = this.rpoll = null;
+  }
+}
+
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+
+function stepLi(state: string, label: string, error?: string | null) {
+  const badge = state === 'done' ? icon('check', 14) : state === 'failed' ? '!' : '';
+  return `<li class="${state}"><span class="badge">${badge}</span><div><span>${esc(label)}</span>${error ? `<span class="xs error-text">${esc(error)}</span>` : ''}</div></li>`;
 }

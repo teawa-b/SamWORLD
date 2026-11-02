@@ -84,6 +84,11 @@ describe('Roomshift scans', () => {
     expect(s.bounds.max[1]).toBeCloseTo(2.4, 0);
     expect(s.cameras).toHaveLength(1);
     expect(s.model).toBe('FAKE mapanything');
+    // The fake room is 4 × 3 m, ceiling never filmed.
+    expect(s.shell.fallback).toBe(false);
+    expect([s.shell.size.width, s.shell.size.depth].sort()).toEqual([expect.closeTo(3, 1), expect.closeTo(4, 1)]);
+    expect(s.shell.ceilingInferred).toBe(true);
+    expect(s.shell.walls).toHaveLength(4);
     const ply = await app.inject({ url: `/api/scans/${scan.id}/cloud.ply` });
     expect(ply.statusCode).toBe(200);
     expect(ply.rawPayload.subarray(0, 3).toString()).toBe('ply');
@@ -95,6 +100,26 @@ describe('Roomshift scans', () => {
       if ((await app.inject({ url: `/api/scans/${scan.id}` })).json().scan.state === 'ready') break;
     }
     expect(calls).toBe(before);
+
+    // Type a world: offline (no MODEL_API_KEY) → placeholder plan + three textures, served as images.
+    expect((await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/restyles`, payload: { prompt: '' } })).statusCode).toBe(400);
+    const started = await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/restyles`, payload: { prompt: 'underwater coral cave' } });
+    expect(started.statusCode).toBe(202);
+    let r = started.json().restyle;
+    expect(r.offline).toBe(true);
+    for (let i = 0; i < 100 && r.state !== 'done' && r.state !== 'failed'; i++) {
+      await new Promise((res) => setTimeout(res, 20));
+      r = (await app.inject({ url: `/api/restyles/${r.id}` })).json().restyle;
+    }
+    expect(r.state).toBe('done');
+    expect(r.plan.surfaces.walls.colorHex).toMatch(/^#[0-9a-f]{6}$/);
+    expect(r.surfaces.map((x: { state: string }) => x.state)).toEqual(['done', 'done', 'done']);
+    const tex = await app.inject({ url: `/api/textures/${r.surfaces[0].texture}` });
+    expect(tex.statusCode).toBe(200);
+    expect(tex.headers['content-type']).toBe('image/png');
+    expect((await app.inject({ url: '/api/textures/..%2Fscans.json' })).statusCode).toBe(404);
+    const list = (await app.inject({ url: `/api/scans/${scan.id}/restyles` })).json().restyles;
+    expect(list[0].id).toBe(r.id);
   });
 
   it('explains when the GPU worker is not connected or Muse is not configured', async () => {

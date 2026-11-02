@@ -13,6 +13,7 @@ import type {
   PropertyMedia,
   ReconstructionRun,
   RoomMappingPatch,
+  RoomShell,
   SceneCorrectionPatch,
   SceneManifest,
 } from './shared/index.js';
@@ -31,6 +32,45 @@ export interface Collections {
   objectJobs: Record<string, ObjectJob>;
   /** Roomshift: room captures and their 3D reconstruction. */
   scans: Record<string, Scan>;
+  /** Roomshift: one "type a world" run on a scan. */
+  restyles: Record<string, Restyle>;
+}
+
+export type SurfaceId = 'walls' | 'floor' | 'ceiling';
+
+export interface RestylePlan {
+  /** Short name for the world, e.g. "Haunted Victorian library". */
+  title: string;
+  brief: string;
+  surfaces: Record<SurfaceId, { prompt: string; colorHex: string; tileMetres: number }>;
+  light: { colorHex: string; intensity: number };
+  fogHex: string;
+}
+
+export interface RestyleSurface {
+  id: SurfaceId;
+  state: 'pending' | 'running' | 'done' | 'failed';
+  /** File under /api/textures/ once painted. */
+  texture: string | null;
+  model: string | null;
+  error: string | null;
+  seconds: number | null;
+}
+
+export interface Restyle {
+  id: string;
+  scanId: string;
+  prompt: string;
+  createdAt: string;
+  updatedAt: string;
+  state: 'planning' | 'painting' | 'done' | 'failed';
+  message: string;
+  plan: RestylePlan | null;
+  surfaces: RestyleSurface[];
+  /** True when MODEL_API_KEY is unset: the plan and textures are local placeholders, not Meta output. */
+  offline: boolean;
+  models: string[];
+  usage: string;
 }
 
 export interface ScanCamera {
@@ -56,6 +96,8 @@ export interface Scan {
   bounds: { min: [number, number, number]; max: [number, number, number] } | null;
   model: string | null;
   timings: Record<string, number>;
+  /** Floor, ceiling and walls fitted to the cloud (room frame: floor y = 0, centred, axis-aligned walls). */
+  shell?: RoomShell | null;
 }
 
 export interface ObjectJob {
@@ -70,7 +112,7 @@ export interface ObjectJob {
 }
 
 type Name = keyof Collections;
-const names: Name[] = ['properties', 'media', 'runs', 'scenes', 'interpretations', 'roomMappings', 'sceneCorrections', 'usage', 'objectJobs', 'scans'];
+const names: Name[] = ['properties', 'media', 'runs', 'scenes', 'interpretations', 'roomMappings', 'sceneCorrections', 'usage', 'objectJobs', 'scans', 'restyles'];
 
 class Store {
   private cache = new Map<Name, Record<string, unknown>>();

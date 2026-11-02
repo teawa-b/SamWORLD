@@ -8,9 +8,9 @@ Output: {"status": "ok", "model": ..., "plyBase64": <binary PLY: float x,y,z + u
 Coordinates: metres, y-up, three.js camera convention (camera looks down -z). MapAnything outputs OpenCV
 (+x right, +y down, +z forward); we convert with M = diag(1, -1, -1): p' = M p, pose' = M @ pose @ M.
 
-Usage follows the MapAnything README (facebookresearch/map-anything): MapAnything.from_pretrained(...),
-load_images(folder), model.infer(views, ...) -> per-view dicts with pts3d, camera_poses, intrinsics, mask,
-conf, img_no_norm. VERIFY these names against the commit you deploy; the code fails loudly if one is missing.
+Usage follows the MapAnything README (facebookresearch/map-anything, checked 2 Nov 2026 against v1.1.4):
+MapAnything.from_pretrained(...), load_images(folder), model.infer(views, ...) -> per-view dicts with pts3d,
+camera_poses (OpenCV cam2world), intrinsics, mask (B,H,W,1), conf, img_no_norm.
 
 Cost guards: one GPU container max, scales to zero after 2 minutes idle, hard timeout, bearer auth.
 
@@ -36,7 +36,8 @@ MAX_POINTS = 400_000
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "libgl1", "libglib2.0-0")
-    .pip_install("torch==2.5.1", "torchvision==0.20.1", "fastapi[standard]", "pillow", "numpy")
+    # MapAnything doesn't pin torch; the default Linux wheels ship with CUDA 12.
+    .pip_install("torch>=2.5", "torchvision", "fastapi[standard]", "pillow", "numpy")
     .run_commands(
         "git clone --depth 1 https://github.com/facebookresearch/map-anything.git /opt/map-anything",
         "cd /opt/map-anything && pip install -e .",
@@ -129,8 +130,10 @@ class MapAnythingWorker:
         pts_all, col_all, cameras = [], [], []
         for p in preds:
             pts = p["pts3d"][0].float().cpu().numpy()  # (H, W, 3) world, OpenCV
-            img = p["img_no_norm"][0].float().cpu().numpy()  # (H, W, 3) 0..1
-            mask = p["mask"][0].cpu().numpy().reshape(pts.shape[:2]).astype(bool)
+            img = p["img_no_norm"][0].float().cpu().numpy()  # (H, W, 3), 0..1 (or 0..255 on some versions)
+            if img.max() > 1.5:
+                img = img / 255.0
+            mask = p["mask"][0].squeeze(-1).cpu().numpy().reshape(pts.shape[:2]).astype(bool)
             K = p["intrinsics"][0].float().cpu().numpy()
             pose = p["camera_poses"][0].float().cpu().numpy()  # cam2world, OpenCV
             h, w = pts.shape[:2]

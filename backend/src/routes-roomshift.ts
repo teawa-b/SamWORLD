@@ -13,8 +13,9 @@ import { HttpError, Id, now, parse, rateLimit } from './http.js';
 import { AiBudget } from './meta/client.js';
 import { restyleImage, surfaceTexture } from './meta/image.js';
 import { validateImage } from './providers/ingest.js';
-import { parsePly } from './shared/index.js';
-import { store, type Scan, type ScanCamera } from './store.js';
+import { startRestyle, textureDir } from './restyle.js';
+import { fitRoomShell, parsePly } from './shared/index.js';
+import { store, type Restyle, type Scan, type ScanCamera } from './store.js';
 
 const scanDir = (id: string) => join(config.dataDir, 'scans', id);
 
@@ -76,9 +77,13 @@ async function reconstruct(scan: Scan): Promise<void> {
         if (v < min[k]) min[k] = v;
         if (v > max[k]) max[k] = v;
       }
+    await save({ message: 'Finding the floor, ceiling and walls…' });
+    const shell = fitRoomShell(pc.positions, { cameras: reply.cameras ?? [] });
+    const shape = shell.fallback ? 'room shape not measured; showing the raw scan' : `room ${shell.size.width.toFixed(1)} × ${shell.size.depth.toFixed(1)} × ${shell.size.height.toFixed(1)} m`;
     await save({
       state: 'ready',
-      message: `Reconstructed ${pc.count.toLocaleString()} points from ${frames.length} frames (${((max[0] - min[0]) || 0).toFixed(1)} × ${((max[2] - min[2]) || 0).toFixed(1)} m)`,
+      shell,
+      message: `Reconstructed ${pc.count.toLocaleString()} points from ${frames.length} frames · ${shape}`,
       cloud: { file: plyFile, points: pc.count },
       cameras: reply.cameras ?? [],
       bounds: { min, max },
@@ -138,6 +143,35 @@ export async function registerRoomshiftRoutes(app: FastifyInstance) {
     if (!scan.cloud) throw new HttpError(404, 'NOT_READY', 'No reconstruction yet');
     reply.header('content-type', 'application/octet-stream').header('cache-control', 'public, max-age=3600');
     return reply.send(createReadStream(join(scanDir(scan.id), scan.cloud.file)));
+  });
+
+  // ------------------------------------------------------------------ restyles ("type a world")
+  app.post('/api/scans/:scanId/restyles', async (req, reply) => {
+    rateLimit(req, 20);
+    const scan = requireScan((req.params as { scanId: string }).scanId);
+    if (scan.state !== 'ready') throw new HttpError(409, 'SCAN_NOT_READY', 'Reconstruct the room first');
+    const body = parse(z.object({ prompt: z.string().trim().min(2).max(300) }), req.body ?? {});
+    return reply.status(202).send({ restyle: await startRestyle(scan, body.prompt) });
+  });
+
+  app.get('/api/scans/:scanId/restyles', async (req) => {
+    const scan = requireScan((req.params as { scanId: string }).scanId);
+    const list = Object.values(store.all('restyles')).filter((r: Restyle) => r.scanId === scan.id);
+    return { restyles: list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
+  });
+
+  app.get('/api/restyles/:restyleId', async (req) => {
+    const r = store.get('restyles', parse(Id, (req.params as { restyleId: string }).restyleId));
+    if (!r) throw new HttpError(404, 'NOT_FOUND', 'Restyle not found');
+    return { restyle: r };
+  });
+
+  app.get('/api/textures/:name', async (req, reply) => {
+    const name = (req.params as { name: string }).name;
+    const m = /^[0-9a-f]{24}\.(png|jpg|webp)$/.exec(name);
+    if (!m || !existsSync(join(textureDir(), name))) throw new HttpError(404, 'NOT_FOUND', 'Texture not found');
+    reply.header('content-type', `image/${m[1] === 'jpg' ? 'jpeg' : m[1]}`).header('cache-control', 'public, max-age=31536000, immutable');
+    return reply.send(createReadStream(join(textureDir(), name)));
   });
 
   // ------------------------------------------------------------------ Muse Image self-test

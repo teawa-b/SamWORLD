@@ -114,6 +114,23 @@ export function changeLevel(world: World, dir: 1 | -1): boolean {
   return enterRoom(world, room.id);
 }
 
+/** Roomshift: walk inside a scanned room (room frame: floor y = 0), colliding with its fitted walls. */
+export function enterScanWalk(world: World, walls: [Vec2, Vec2][], at: Vec2 = [0, 0]) {
+  glide.active = false;
+  app.mode.value = 'walk';
+  app.walkLevelId.value = null;
+  segments = walls;
+  world.player.position.set(at[0], 0, at[1]);
+  world.player.rotation.set(0, 0, 0);
+  if (!app.inXR.value) {
+    look.yaw = 0;
+    look.pitch = -0.1;
+    world.camera.position.set(0, EYE_HEIGHT, 0);
+    world.camera.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
+    setWalkFov(world, true);
+  }
+}
+
 export function exitRoom(world: World) {
   app.mode.value = 'dollhouse';
   app.walkLevelId.value = null;
