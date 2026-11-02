@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'walkin-photo-'));
 process.env.LOG_LEVEL = 'silent';
-const { photoWalls, composite } = await import('../src/photo-walls.js');
+const { photoWalls, composite, dropSpecks } = await import('../src/photo-walls.js');
 const { fitRoomShell, shellPlanes, transformPointRowMajor } = await import('../src/shared/index.js');
 
 describe('photo walls', () => {
@@ -75,5 +75,20 @@ describe('filling the unseen part', () => {
     expect(col[10 * 3 + 1]).toBeLessThan(200);
     expect(col[17 * 3 + 1]).toBeCloseTo(200); // well inside: green
     expect(col[19 * 3]).toBe(100); // magenta answer ignored
+  });
+});
+
+describe('dark specks', () => {
+  it('drops small dark specks on a light wall but keeps a long dark line', () => {
+    const w = 60, h = 40;
+    const col = new Float32Array(w * h * 3).fill(220);
+    const has = new Uint8Array(w * h).fill(1);
+    const paint = (x: number, y: number) => col.fill(30, (y * w + x) * 3, (y * w + x) * 3 + 3);
+    for (let y = 10; y < 13; y++) for (let x = 10; x < 13; x++) paint(x, y); // 3 × 3 speck
+    for (let x = 5; x < 55; x++) paint(x, 30); // a picture frame's edge: 50 texels long
+    dropSpecks(col, has, w, h);
+    expect(has[11 * w + 11]).toBe(0);
+    expect(has[30 * w + 30]).toBe(1);
+    expect(has[5 * w + 5]).toBe(1);
   });
 });

@@ -3,7 +3,9 @@
  * points (which look coarse up close and in a headset). Every texel of every shell plane (1 cm) is projected
  * into each frame through its camera; frames that see it unobstructed (depth-tested against the point cloud,
  * so the bed isn't painted onto the wall behind it) contribute its colour, weighted towards head-on, close
- * views. Found furniture blocks the view too (its box is drawn into each frame's depth buffer), so a bed
+ * views, in two passes: the second keeps only frames whose colour agrees with the first pass's average, so a
+ * frame that is slightly off (and puts a dark edge of furniture onto the wall) is outvoted. Small isolated
+ * dark specks that survive are treated as unseen. Found furniture blocks the view too (its box is drawn into each frame's depth buffer), so a bed
  * whose points are sparse still isn't smeared onto the wall behind it. Texels no frame saw are filled
  * smoothly from their surroundings, then, where a surface has real gaps, by Muse Image: it gets the photo
  * with the gaps painted magenta and paints them in; only those gaps are taken from its answer (feathered
@@ -28,6 +30,8 @@ const TEXEL = 0.01; // metres
 const MAX_SIDE = 2048;
 const ZCELL = 2; // camera pixels per depth-buffer cell
 const OCCLUSION = 0.12; // metres in front of the surface that count as something blocking it
+const AGREE = 40; // second pass: a frame's colour must be within this (per channel, 0–255) of the first-pass average
+const SPECK = 60; // dark specks smaller than this many texels (about 8 × 8 cm) are dropped
 export const PHOTO_WALLS_VERSION = 'photo-walls-v2';
 /** Surfaces with at least this share unseen get Muse Image's fill. */
 const INPAINT_FROM = 0.08;
@@ -76,10 +80,19 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
       }
     const n = p.normal;
     const nScan = [0, 1, 2].map((k) => toScan[k * 4] * n[0] + toScan[k * 4 + 1] * n[1] + toScan[k * 4 + 2] * n[2]);
-    return { plane: p, tw, th, pts, n: nScan, sum: new Float32Array(tw * th * 3), wsum: new Float32Array(tw * th) };
+    return { plane: p, tw, th, pts, n: nScan, sum: new Float32Array(tw * th * 3), wsum: new Float32Array(tw * th), ref: null as Float32Array | null };
   });
 
   const nFrames = Math.min(scan.frames.length, scan.cameras.length);
+  for (let pass = 0; pass < 2; pass++) {
+  if (pass === 1)
+    // The first pass's average becomes the reference; start the sums again.
+    for (const G of grids) {
+      G.ref = new Float32Array(G.sum.length);
+      for (let t = 0; t < G.wsum.length; t++) if (G.wsum[t]) for (let c = 0; c < 3; c++) G.ref[t * 3 + c] = G.sum[t * 3 + c] / G.wsum[t];
+      G.sum.fill(0);
+      G.wsum.fill(0);
+    }
   for (let f = 0; f < nFrames; f++) {
     const cam = scan.cameras[f];
     const buf = await readFile(join(scanDir(scan.id), scan.frames[f].file));
@@ -153,14 +166,18 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
         const x0 = Math.floor(px), y0 = Math.floor(py);
         if (x0 < 0 || y0 < 0 || x0 >= img.width - 1 || y0 >= img.height - 1) continue;
         const ax = px - x0, ay = py - y0;
+        const rgb = [0, 0, 0];
         for (let c = 0; c < 3; c++) {
           const at = (yy: number, xx: number) => img.data[(yy * img.width + xx) * 4 + c];
-          const val = at(y0, x0) * (1 - ax) * (1 - ay) + at(y0, x0 + 1) * ax * (1 - ay) + at(y0 + 1, x0) * (1 - ax) * ay + at(y0 + 1, x0 + 1) * ax * ay;
-          sum[t * 3 + c] += val * w;
+          rgb[c] = at(y0, x0) * (1 - ax) * (1 - ay) + at(y0, x0 + 1) * ax * (1 - ay) + at(y0 + 1, x0) * (1 - ax) * ay + at(y0 + 1, x0 + 1) * ax * ay;
         }
+        const ref = G.ref;
+        if (ref && Math.max(Math.abs(rgb[0] - ref[t * 3]), Math.abs(rgb[1] - ref[t * 3 + 1]), Math.abs(rgb[2] - ref[t * 3 + 2])) > AGREE) continue;
+        for (let c = 0; c < 3; c++) sum[t * 3 + c] += rgb[c] * w;
         wsum[t] += w;
       }
     }
+  }
   }
 
   await mkdir(join(scanDir(scan.id), 'walls'), { recursive: true });
@@ -195,6 +212,7 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
         keep[y * tw + x] = n >= 0.6 * all ? 1 : 0;
       }
     has.set(keep);
+    dropSpecks(col, has, tw, th);
     const seenMask = Uint8Array.from(has);
     let kept = 0;
     for (const v of seenMask) kept += v;
@@ -234,6 +252,51 @@ export async function photoWalls(scan: Scan, opts: { inpaint?: Inpaint | null } 
     }),
   );
   return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Small dark specks on a lighter surface (a stray frame's edge of furniture, a hole in the cloud) are
+ * marked unseen: texels clearly darker than their 9 × 9 neighbourhood, in connected groups smaller than
+ * SPECK texels. Real thin details (a picture frame, a door edge) form long connected shapes and stay.
+ */
+export function dropSpecks(col: Float32Array, has: Uint8Array, w: number, h: number) {
+  const L = new Float32Array(w * h);
+  for (let t = 0; t < w * h; t++) L[t] = has[t] ? 0.3 * col[t * 3] + 0.59 * col[t * 3 + 1] + 0.11 * col[t * 3 + 2] : 0;
+  // Integral images of luminance and of the seen mask for 9 × 9 neighbourhood means.
+  const IL = new Float64Array((w + 1) * (h + 1)), IM = new Float64Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const k = (y + 1) * (w + 1) + x + 1;
+      IL[k] = L[y * w + x] + IL[k - 1] + IL[k - (w + 1)] - IL[k - (w + 1) - 1];
+      IM[k] = has[y * w + x] + IM[k - 1] + IM[k - (w + 1)] - IM[k - (w + 1) - 1];
+    }
+  const box = (I: Float64Array, x0: number, y0: number, x1: number, y1: number) => I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0];
+  const dark = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const t = y * w + x;
+      if (!has[t]) continue;
+      const x0 = Math.max(0, x - 4), y0 = Math.max(0, y - 4), x1 = Math.min(w, x + 5), y1 = Math.min(h, y + 5);
+      const n = box(IM, x0, y0, x1, y1);
+      if (n > 0 && L[t] < box(IL, x0, y0, x1, y1) / n - 45) dark[t] = 1;
+    }
+  // Connected groups of dark texels (4-neighbour); drop the small ones.
+  const seenGroup = new Uint8Array(w * h);
+  for (let t0 = 0; t0 < w * h; t0++) {
+    if (!dark[t0] || seenGroup[t0]) continue;
+    const group = [t0];
+    seenGroup[t0] = 1;
+    for (let i = 0; i < group.length && group.length < SPECK; i++) {
+      const t = group[i], x = t % w, y = (t - x) / w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const q = yy * w + xx;
+        if (dark[q] && !seenGroup[q]) (seenGroup[q] = 1), group.push(q);
+      }
+    }
+    if (group.length < SPECK) for (const t of group) has[t] = 0;
+  }
 }
 
 /**
