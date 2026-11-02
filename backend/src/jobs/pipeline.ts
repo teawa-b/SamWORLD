@@ -412,18 +412,13 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   let objects = applySceneCorrections(placed.objects, structure, property.id);
   await ctx.log('place', `${objects.length} furnishings placed, ${placed.rejected.length} suggestion(s) rejected by constraints`, placed.rejected.length ? 'warn' : 'info');
 
-  // Optional SAM 3D hero object (Modal). Off by default; never blocks the scene.
-  let sam3dState: EvidenceFlags['sam3d'] = 'disabled';
+  // SAM 3D furniture is built AFTER the scene is published (see the end), so it never holds the model back.
+  const sam3dState: EvidenceFlags['sam3d'] = 'disabled';
+  let sam3dMax = 0;
   if (config.sam3d.enabled) {
-    if (config.sam3d.requireManualApproval && !opts.sam3dApproved) {
-      await ctx.log('place', 'SAM 3D enabled but this run was not manually approved; proxies kept');
-    } else if (opts.sam3dMaxObjects === 0) {
-      await ctx.log('place', 'SAM 3D skipped for this build (switched off on the review screen); stand-in shapes kept');
-    } else {
-      const r = await requestSam3d({ objects, detections, max: opts.sam3dMaxObjects ?? config.sam3d.maxObjectsPerRun, log: (m, l) => ctx.log('place', m, l) });
-      objects = r.objects;
-      sam3dState = r.state;
-    }
+    if (config.sam3d.requireManualApproval && !opts.sam3dApproved) await ctx.log('place', 'SAM 3D enabled but this run was not manually approved; proxies kept');
+    else if (opts.sam3dMaxObjects === 0) await ctx.log('place', 'SAM 3D skipped for this build (switched off on the review screen); stand-in shapes kept');
+    else sam3dMax = opts.sam3dMaxObjects ?? config.sam3d.maxObjectsPerRun;
   }
   await ctx.setState('PLACED', 'place', 0.75);
 
@@ -480,6 +475,43 @@ export async function runPipeline(runId: string, opts: { forceReparse?: boolean;
   run.finishedAt = now();
   await ctx.setState('READY', 'done', 1);
   await ctx.log('done', `Scene v${final.sceneVersion} ready. ${budget.summary()}`);
+
+  // ---- 9. Real furniture (SAM 3D), after the scene is out ---------------------------
+  if (sam3dMax > 0) await buildFurniture3d(ctx, property.id, objects, detections, sam3dMax);
+}
+
+/** Rebuild photographed furniture with SAM 3D and swap each model into the published scene as it lands. */
+async function buildFurniture3d(ctx: Ctx, propertyId: string, objects: SceneObject[], detections: Detection[], max: number) {
+  const update = async (fn: (s: SceneManifest) => void) => {
+    const cur = store.get('scenes', propertyId);
+    if (!cur) return;
+    fn(cur);
+    cur.sceneVersion += 1;
+    cur.generatedAt = now();
+    await store.put('scenes', propertyId, cur);
+  };
+  let done = 0;
+  let failed = 0;
+  const r = await requestSam3d({
+    objects,
+    detections,
+    max,
+    log: (m, l) => ctx.log('furniture-3d', m, l),
+    onStart: (total) => update((s) => (s.furniture3d = { total, done: 0, failed: 0, running: total > 0 })),
+    onResult: (obj) =>
+      update((s) => {
+        if (obj) {
+          done++;
+          s.objects = s.objects.map((o) => (o.id === obj.id ? { ...obj, positionXYZ: o.positionXYZ, rotationY: o.rotationY } : o));
+          s.evidenceFlags = { ...s.evidenceFlags, sam3d: 'used' };
+        } else failed++;
+        s.furniture3d = { total: s.furniture3d?.total ?? 0, done, failed, running: true };
+      }),
+  });
+  await update((s) => {
+    s.furniture3d = { total: s.furniture3d?.total ?? 0, done, failed, running: false };
+    if (r.state === 'used') s.evidenceFlags = { ...s.evidenceFlags, sam3d: 'used', notes: s.evidenceFlags.notes.map((n) => (n.startsWith('Furniture is represented by proxy') ? `${done} piece(s) of furniture were reconstructed from the photos with SAM 3D; the rest are stand-in shapes.` : n)) };
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -228,14 +228,19 @@ export async function requestSam3d(opts: {
   log: (msg: string, level?: StepLog['level']) => Promise<void>;
   /** How many objects to rebuild this run (the person chose this on the review screen). */
   max?: number;
+  onStart?: (total: number) => Promise<void> | void;
+  /** Called as each object finishes: the rebuilt object, or null if it stayed a proxy. */
+  onResult?: (obj: SceneObject | null) => Promise<void> | void;
 }): Promise<{ objects: SceneObject[]; state: EvidenceFlags['sam3d'] }> {
   const ready = sam3dReady();
   if (!ready.ok) {
     await opts.log(`${ready.reason} Proxies kept.`, 'warn');
     return { objects: opts.objects, state: 'failed' };
   }
+  // Furniture, not ornaments: small decor (vases, bowls, lamps, mirrors…) stays a stand-in, biggest pieces first.
+  const DECOR = /vase|bowl|lamp|mirror|plant|book|clock|picture|frame|candle|cushion|pillow|ornament|telescope|toaster|kettle|bin|rug|curtain/i;
   const heroes = opts.objects
-    .filter((o) => o.isMovable && o.sourceMediaIds.length)
+    .filter((o) => o.isMovable && o.sourceMediaIds.length && !DECOR.test(o.kind) && Math.max(...o.sizeM) >= 0.35)
     .map((o) => ({ o, det: detectionFor(o, opts.detections) }))
     .filter((x): x is { o: SceneObject; det: Detection } => !!x.det)
     .sort((a, b) => b.o.sizeM[0] * b.o.sizeM[2] - a.o.sizeM[0] * a.o.sizeM[2])
@@ -246,21 +251,24 @@ export async function requestSam3d(opts: {
     await opts.log('SAM 3D: no object has a SAM 3.1 detection to reconstruct from; proxies kept');
     return { objects: opts.objects, state: 'failed' };
   }
-  await opts.log(`SAM 3D: rebuilding ${heroes.length} item(s) from their photos (${heroes.map((h) => h.o.kind).join(', ')}), 3 at a time`);
+  await opts.log(`SAM 3D: rebuilding ${heroes.length} item(s) from their photos (${heroes.map((h) => h.o.kind).join(', ')}), 5 at a time`);
+  await opts.onStart?.(heroes.length);
   let ok = 0;
   const out = [...opts.objects];
   let next = 0;
   const worker = async () => {
     while (next < heroes.length) {
       const { o, det } = heroes[next++];
-      const r = await reconstructObject(o, det, opts.log);
+      const r = await reconstructObject(o, det, opts.log).catch((e) => ({ ok: false, object: o, message: (e as Error).message }));
       if (r.ok) {
         out[out.findIndex((x) => x.id === o.id)] = { ...r.object, positionXYZ: o.positionXYZ, rotationY: o.rotationY };
         ok++;
+        await opts.log(`SAM 3D: ${o.kind} done (${ok} of ${heroes.length})`);
       }
+      await opts.onResult?.(r.ok ? r.object : null);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(3, heroes.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(5, heroes.length) }, worker));
   await opts.log(`SAM 3D: ${ok} of ${heroes.length} item(s) rebuilt from photos${ok < heroes.length ? '; the rest keep stand-in shapes' : ''}`, ok < heroes.length ? 'warn' : 'info');
   return { objects: out, state: ok ? 'used' : 'failed' };
 }

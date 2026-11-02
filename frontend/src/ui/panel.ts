@@ -79,6 +79,7 @@ export class Panel {
   private minimap: Minimap;
   private sam3dReason = '';
   private objectJob: string | null = null;
+  private furniturePoll: number | null = null;
   private caps: Capabilities | null = null;
   private realtyNotice = '';
   private property: Property | null = null;
@@ -181,6 +182,11 @@ export class Panel {
     document.body.classList.toggle('wide-panel', v.name === 'import' || v.name === 'review');
     this.minimap.show(v.name === 'explore' || v.name === 'processing');
     this.render();
+    if (v.name === 'explore') this.watchFurniture(v.propertyId);
+    else if (this.furniturePoll) {
+      clearInterval(this.furniturePoll);
+      this.furniturePoll = null;
+    }
     this.body.scrollTop = 0;
   }
 
@@ -371,6 +377,7 @@ export class Panel {
         <button class="icon-btn" data-action="back-listing" aria-label="Back to media" title="Back to media">${icon('back')}</button>
         <div class="grow"><h2 class="truncate" style="font-size:17px">${esc(s.property.address)}</h2><div class="sub">${s.structure.levels.length} floors · ${s.structure.rooms.length} rooms${estimatedLayout(s) ? ' · <span class="badge-est">estimated layout</span>' : ''}</div></div>
       </div>
+      ${s.furniture3d?.running ? `<div class="hint furniture3d">${icon('sparkle')}<span>Building 3D furniture from the photos: <b>${s.furniture3d.done} of ${s.furniture3d.total}</b> done${s.furniture3d.failed ? `, ${s.furniture3d.failed} kept as stand-ins` : ''}. Models appear as they finish; you can explore meanwhile.</span></div>` : s.furniture3d && s.furniture3d.total ? `<p class="xs muted">${s.furniture3d.done} of ${s.furniture3d.total} pieces of furniture rebuilt from the photos with SAM 3D.</p>` : ''}
       ${walking ? '' : `<div class="segmented" role="tablist">${(['explore', 'rooms', 'evidence'] as const).map((t) => `<button role="tab" data-action="tab" data-tab="${t}" class="${t === tab ? 'active' : ''}">${{ explore: 'Explore', rooms: 'Rooms', evidence: 'How it’s built' }[t]}</button>`).join('')}</div>`}
       ${walking || tab === 'explore' ? this.renderControls(s) : tab === 'rooms' ? this.renderRooms(s) : this.renderEvidence(s)}`;
   }
@@ -782,6 +789,29 @@ export class Panel {
     else if (k === '1') separateFloors(!floorsSeparated());
     else if (k === 'r') resetBuilding();
     else if (k === 'e' && app.selectedRoomId.value) enterRoom(this.world, app.selectedRoomId.value);
+  }
+
+  /** While SAM 3D models are still being made, reload the scene as they land (every 8 s). */
+  private watchFurniture(pid: string) {
+    if (this.furniturePoll) clearInterval(this.furniturePoll);
+    this.furniturePoll = null;
+    if (staticMode || !app.scene.value?.furniture3d?.running) return;
+    this.furniturePoll = window.setInterval(async () => {
+      const cur = app.scene.value;
+      if (this.view.name !== 'explore' || !cur) return;
+      const next = await api.scene(pid).catch(() => null);
+      if (!next) return;
+      if (next.sceneVersion !== cur.sceneVersion) {
+        app.scene.value = next;
+        if (this.view.name === 'explore' && this.view.tab === 'explore' && app.mode.value !== 'walk') this.render();
+      }
+      if (!next.furniture3d?.running && this.furniturePoll) {
+        clearInterval(this.furniturePoll);
+        this.furniturePoll = null;
+        this.toast(`3D furniture finished: ${next.furniture3d?.done ?? 0} piece(s) rebuilt from the photos.`);
+        this.render();
+      }
+    }, 8000);
   }
 
   private async build(pid: string, opts: { sam3dApproved?: boolean; sam3dMaxObjects?: number } = {}) {

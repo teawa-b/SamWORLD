@@ -505,6 +505,8 @@ export const SceneManifest = z.object({
   verification: VerificationReport,
   evidenceFlags: EvidenceFlags,
   previewCamera: z.object({ position: Vec3, target: Vec3 }),
+  /** SAM 3D furniture being built after the scene was published (models swap in as they land). */
+  furniture3d: z.object({ total: z.number().int(), done: z.number().int(), failed: z.number().int(), running: z.boolean() }).optional(),
 });
 export type SceneManifest = z.infer<typeof SceneManifest>;
 
