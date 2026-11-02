@@ -191,12 +191,35 @@ function objectList(scan: Scan): string {
   return `Objects found in the room (id: name, width × height × depth in metres):\n${list.map((o) => `${o.id}: ${o.name}, ${o.box.size.map((v) => v.toFixed(1)).join(' × ')}`).join('\n')}`;
 }
 
+/** Run at most `n` of the given jobs at once. */
+export function slots(n: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    while (active >= n) await new Promise<void>((res) => waiting.push(res));
+    active++;
+    try {
+      return await fn();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
+}
+
+/** Muse Image restyles in flight per world (on top of the three surfaces) and SAM 3D jobs in flight (fal). */
+const MUSE_OBJECT_SLOTS = 5;
+const SAM3D_SLOTS = 5;
+
 /**
  * Each object: Muse Image restyles the crop of its clearest view (same pose and framing), then SAM 3D
- * rebuilds the restyled piece as a 3D model. Three objects in flight at a time.
+ * rebuilds the restyled piece as a 3D model. Two independent queues, so a piece waiting on SAM 3D never
+ * holds up the next restyle: every restyle starts at once (5 at a time) and each goes to SAM 3D the moment
+ * its image is ready (5 at a time).
  */
 async function paintObjects(scan: Scan, r: Restyle, budget: AiBudget, save: () => Promise<void>, asFilmed = false) {
-  const queue = [...(r.objects ?? [])];
+  const muse = slots(MUSE_OBJECT_SLOTS);
+  const sam = slots(SAM3D_SLOTS);
   const work = async (o: RestyleObject) => {
     const t = Date.now();
     const so = scan.objects?.find((x) => x.id === o.id);
@@ -215,7 +238,7 @@ async function paintObjects(scan: Scan, r: Restyle, budget: AiBudget, save: () =
         if (!existsSync(join(textureDir(), image))) await writeFile(join(textureDir(), image), crop);
       } else if (!image) {
         const args = { budget, imageDataUrl: `data:image/jpeg;base64,${crop.toString('base64')}`, instruction: o.instruction, subject: so.label };
-        const img = surface ? await restyleFlat(args) : await restyleImage({ ...args, subject: o.name });
+        const img = await muse(() => (surface ? restyleFlat(args) : restyleImage({ ...args, subject: o.name })));
         const buf = Buffer.from(img.imageBase64, 'base64');
         image = `${key}.${sniff(buf)}`;
         await writeFile(join(textureDir(), image), buf);
@@ -232,7 +255,7 @@ async function paintObjects(scan: Scan, r: Restyle, budget: AiBudget, save: () =
       o.state = 'lifting';
       await save();
       const buf = await readFile(join(textureDir(), image));
-      const lifted = await liftImage({ id: `${r.id}-${o.id}`, label: so.label, image: buf, mime: image.endsWith('.png') ? 'image/png' : image.endsWith('.webp') ? 'image/webp' : 'image/jpeg' });
+      const lifted = await sam(() => liftImage({ id: `${r.id}-${o.id}`, label: so.label, image: buf, mime: image!.endsWith('.png') ? 'image/png' : image!.endsWith('.webp') ? 'image/webp' : 'image/jpeg' }));
       if (!lifted.ok) throw new Error(`SAM 3D: ${lifted.error}`);
       o.model = lifted.url;
       o.format = lifted.format;
@@ -245,11 +268,7 @@ async function paintObjects(scan: Scan, r: Restyle, budget: AiBudget, save: () =
     o.seconds = Math.round((Date.now() - t) / 100) / 10;
     await save();
   };
-  await Promise.all(
-    Array.from({ length: Math.min(3, queue.length) }, async () => {
-      for (let o = queue.shift(); o; o = queue.shift()) await work(o);
-    }),
-  );
+  await Promise.all((r.objects ?? []).map(work));
 }
 
 function roomDescription(scan: Scan): string {
