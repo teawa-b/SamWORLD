@@ -11,3 +11,4 @@ export * from './room-shell.js';
 export * from './scan-objects.js';
 export * from './cloud-codec.js';
 export * from './xr-align.js';
+export * from './shell-planes.js';

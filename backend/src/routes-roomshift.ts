@@ -15,6 +15,7 @@ import { HttpError, Id, now, parse, rateLimit } from './http.js';
 import { AiBudget } from './meta/client.js';
 import { restyleImage, surfaceTexture } from './meta/image.js';
 import { understandScan } from './objects.js';
+import { photoWalls } from './photo-walls.js';
 import { validateImage } from './providers/ingest.js';
 import { startRestyle, textureDir } from './restyle.js';
 import { encodeCloud, findInnerWalls, fitRoomShell, parsePly, strayFilter, transformPointRowMajor } from './shared/index.js';
@@ -45,6 +46,16 @@ async function compactCloud(scan: Scan): Promise<string> {
     await writeFile(file, await promisify(gzip)(encodeCloud(pos, col), { level: 6 }));
   }
   return file;
+}
+
+/** Project the video onto the shell (after objects, which block the view); failures leave the point-based coat. */
+async function paintPhotoWalls(scan: Scan) {
+  try {
+    const walls = await photoWalls(scan);
+    await store.put('scans', scan.id, Object.assign(scan, { photoWalls: walls, updatedAt: now() }));
+  } catch {
+    // The viewer falls back to the point-based coat.
+  }
 }
 
 function requireScan(id: string): Scan {
@@ -134,6 +145,7 @@ async function reconstruct(scan: Scan): Promise<void> {
     });
     await compactCloud(scan).catch(() => undefined);
     await understandScan(scan);
+    await paintPhotoWalls(scan);
   } catch (e) {
     await save({ state: 'failed', message: (e as Error).message });
   }
@@ -190,7 +202,7 @@ export async function registerRoomshiftRoutes(app: FastifyInstance) {
     if (scan.objectsStatus?.state !== 'running') {
       scan.objectsStatus = { state: 'running', message: 'Starting…', usage: '' };
       await store.put('scans', scan.id, scan);
-      void understandScan(scan);
+      void understandScan(scan).then(() => paintPhotoWalls(scan));
     }
     return reply.status(202).send({ scan });
   });
@@ -210,6 +222,14 @@ export async function registerRoomshiftRoutes(app: FastifyInstance) {
     const file = await compactCloud(scan);
     reply.header('content-type', 'application/octet-stream').header('content-encoding', 'gzip').header('cache-control', 'public, max-age=3600');
     return reply.send(createReadStream(file));
+  });
+
+  app.get('/api/scans/:scanId/walls/:file', async (req, reply) => {
+    const { scanId, file } = req.params as { scanId: string; file: string };
+    const scan = requireScan(scanId);
+    if (!/^[a-z0-9.-]+\.jpg$/.test(file) || !scan.photoWalls?.some((w) => w.file === file)) throw new HttpError(404, 'NOT_FOUND', 'No such wall');
+    reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=300');
+    return reply.send(createReadStream(join(scanDir(scan.id), 'walls', file)));
   });
 
   app.get('/api/scans/:scanId/cloud.ply', async (req, reply) => {

@@ -5,8 +5,10 @@
  *  - The point cloud is split into floor / ceiling / walls / "stuff" (furniture) buckets.
  *  - The fitted shell (floor, ceiling, four walls) is built as planes facing into the room, so from outside
  *    the near walls cull away (dollhouse view) and from inside you see every surface.
- *  - Before any paint, each shell plane wears a "base coat": its own scan points rasterised into a texture
- *    with the holes filled, so the room reads as solid surfaces in their real colours, not floating dots.
+ *  - Before any paint, each shell plane wears a "base coat": the video projected onto it (photo walls, made
+ *    by the backend) or, until those exist, its own scan points rasterised with the holes filled, so the room
+ *    reads as solid surfaces in their real colours, not floating dots.
+ *  - Clean view (always in a headset): no scan points at all, only surfaces, pictures and 3D models.
  *  - When a surface's new texture arrives, the paint spreads across it from where you are (a growing sphere
  *    in the shader with a glowing edge), then that surface's scan points fade away.
  *  - Objects found by SAM 3.1 are shown as outlined boxes with their names. When a world restyles one, its
@@ -47,7 +49,7 @@ import {
   type Texture,
   type World,
 } from '@iwsdk/core';
-import { decodeCloud, frontFace, insideBox, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
+import { decodeCloud, frontFace, innerWallId, insideBox, isEncodedCloud, parsePly, transformPointRowMajor, type ObjectBox, type RoomShell } from '../shared/index.js';
 
 export type SurfaceId = 'walls' | 'floor' | 'ceiling';
 type Bucket = SurfaceId | 'stuff';
@@ -119,6 +121,10 @@ export class RoomScene {
   private loose: Points | null = null;
   private roomObjects: RoomObject[] = [];
   private objectsShown = true;
+  /** Plane id → URL of its photo texture. */
+  private photoWalls: Record<string, string> = {};
+  private clean = false;
+  private cleanNow = false;
   private passthrough = false;
   private savedBackground: { bg: unknown; fog: unknown } | null = null;
   shell: RoomShell | null = null;
@@ -128,7 +134,8 @@ export class RoomScene {
   }
 
   /** Build the room from the scan's cloud (compact RSC1 or PLY) and fitted shell. */
-  load(cloud: ArrayBuffer, shell: RoomShell | null | undefined) {
+  load(cloud: ArrayBuffer, shell: RoomShell | null | undefined, photoWalls: Record<string, string> = {}) {
+    this.photoWalls = photoWalls;
     this.clear();
     this.group = new Group();
     this.group.name = 'RoomshiftRoom';
@@ -262,7 +269,7 @@ export class RoomScene {
         const m = pts.material as PointsMaterial;
         const goal = this.coated.has(id) || (s.painted && s.reveal.value >= s.target * 0.6) ? 0 : 1;
         m.opacity += (goal - m.opacity) * Math.min(1, dt * 3);
-        pts.visible = m.opacity > 0.02;
+        pts.visible = m.opacity > 0.02 && !this.cleanNow;
       }
     }
     const anyPaint = [...this.surfaces.values()].some((s) => s.painted);
@@ -271,7 +278,7 @@ export class RoomScene {
       const m = this.loose.material as PointsMaterial;
       m.transparent = true;
       m.opacity += ((anyPaint ? 0 : 1) - m.opacity) * Math.min(1, dt * 2);
-      this.loose.visible = m.opacity > 0.02;
+      this.loose.visible = m.opacity > 0.02 && !this.cleanNow;
     }
   }
 
@@ -432,9 +439,18 @@ export class RoomScene {
     }
   }
 
-  /** In a headset the outlined boxes and labels are clutter; they come back on leaving. */
+  /** In a headset the outlined boxes, labels and scan points are clutter; they come back on leaving. */
   setHeadset(on: boolean) {
     for (const o of this.objects.values()) o.root.visible = !on && this.objectsShown;
+    this.setClean(on || this.clean, false);
+  }
+
+  /** Clean view: no scan points, only the surfaces, pictures on the walls and 3D furniture. */
+  setClean(on: boolean, remember = true) {
+    if (remember) this.clean = on;
+    for (const [k, p] of this.points) p.visible = !on && !this.coated.has(k as SurfaceId);
+    if (this.loose) this.loose.visible = !on;
+    this.cleanNow = on;
   }
 
   /** Emphasise one object (or none). */
@@ -550,10 +566,20 @@ export class RoomScene {
           cnt[k]++;
           for (let c = 0; c < 3; c++) sum[k * 3 + c] += src.c[i + c];
         }
+        const photo = this.photoWalls[m.userData.planeId as string];
         const tex = fillHoles(sum, cnt, tw, th);
-        if (!tex) continue;
+        if (!tex && !photo) continue;
         const inner = !!m.userData.inner;
         const mat = new MeshBasicMaterial({ map: tex, side: inner ? DoubleSide : undefined });
+        if (photo)
+          // The video projected onto this plane: sharper than the points; swap it in once it's loaded.
+          void this.loader.loadAsync(photo).then((t) => {
+            t.colorSpace = SRGBColorSpace;
+            t.anisotropy = 8;
+            mat.map?.dispose();
+            mat.map = t;
+            mat.needsUpdate = true;
+          }).catch(() => undefined);
         const b = new Mesh(m.geometry, mat);
         b.position.copy(m.position);
         b.rotation.copy(m.rotation);
@@ -581,6 +607,7 @@ export class RoomScene {
     const fm = new Mesh(new PlaneGeometry(W, D), floor.mat);
     fm.rotation.x = -Math.PI / 2; // faces up
     fm.name = 'Shell_floor';
+    fm.userData.planeId = 'floor';
     floor.meshes.push(fm);
 
     const ceil = mk('ceiling');
@@ -588,6 +615,7 @@ export class RoomScene {
     cm.rotation.x = Math.PI / 2; // faces down
     cm.position.y = H;
     cm.name = 'Shell_ceiling';
+    cm.userData.planeId = 'ceiling';
     ceil.meshes.push(cm);
 
     const walls = mk('walls');
@@ -599,6 +627,7 @@ export class RoomScene {
       m.rotation.y = Math.atan2(w.normal[0], w.normal[1]);
       m.userData.length = len;
       m.name = `Shell_wall_${i}`;
+      m.userData.planeId = `wall-${i}`;
       walls.meshes.push(m);
     }
     // Inner walls (an L-shaped room's inner corner): seen from both sides; the paint wins over the base coat.
@@ -615,6 +644,7 @@ export class RoomScene {
       m.userData.length = len;
       m.userData.inner = true;
       m.name = `Shell_inner_${i}`;
+      m.userData.planeId = innerWallId(w);
       walls.meshes.push(m);
     }
     for (const s of this.surfaces.values()) for (const m of s.meshes) this.group.add(m);

@@ -49,6 +49,7 @@ export interface InnerWall {
   support: number;
 }
 
+
 export interface FitShellOptions {
   /** Camera poses (row-major world-from-camera, y-up) used to guess "up" before the floor is found. */
   cameras?: { pose: number[] }[];

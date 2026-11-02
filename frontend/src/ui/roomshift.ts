@@ -29,6 +29,8 @@ interface Scan {
   timings: Record<string, number>;
   model: string | null;
   shell?: RoomShell | null;
+  photoWalls?: { id: string; file: string }[];
+  updatedAt?: string;
   objects?: (RoomObject & { label: string; views: number; crop: string | null })[];
   objectsStatus?: { state: 'running' | 'done' | 'failed' | 'skipped'; message: string; usage: string };
 }
@@ -109,6 +111,8 @@ export class RoomshiftPanel {
   private shown: string | null = null;
   private selected: string | null = null;
   private boxesOn = true;
+  /** Hide the scan's points (surfaces, pictures and 3D furniture only). */
+  private cleanView = false;
 
   constructor(
     private world: World,
@@ -224,6 +228,7 @@ export class RoomshiftPanel {
       ${steps}
       <div class="review-actions">
         ${sh && !sh.fallback ? `<button class="btn small" data-action="walk">${icon(walking ? 'cube' : 'walk', 16)}${walking ? 'Back to overview' : 'Walk inside'}</button>` : ''}
+        <button class="btn small" data-action="clean">${icon('cube', 16)}${this.cleanView ? 'Show scan dots' : 'Hide scan dots'}</button>
         ${s.objects?.length ? `<button class="btn small" data-action="boxes">${icon('cube', 16)}${this.boxesOn ? 'Hide' : 'Show'} outlines</button>` : ''}
         ${r ? `<button class="btn small" data-action="original">${icon('reset', 16)}Show original</button>` : ''}
       </div>
@@ -330,6 +335,11 @@ export class RoomshiftPanel {
       this.room.highlight(this.selected);
       this.render();
     }
+    if (a === 'clean') {
+      this.cleanView = !this.cleanView;
+      this.room.setClean(this.cleanView);
+      this.render();
+    }
     if (a === 'boxes') {
       this.room.showObjects((this.boxesOn = !this.boxesOn));
       this.render();
@@ -403,7 +413,7 @@ export class RoomshiftPanel {
       const s = this.scan;
       if (s.state === 'ready') {
         // Rebuild when the cloud or the inner walls change (furniture fronts are dropped after objects are found).
-        const key = `${s.id}:${s.cloud?.file}:${JSON.stringify(s.shell?.inner ?? [])}`;
+        const key = `${s.id}:${s.cloud?.file}:${JSON.stringify(s.shell?.inner ?? [])}:${(s.photoWalls ?? []).length}`;
         if (this.shown !== key) {
           this.shown = key;
           await this.showRoom();
@@ -431,7 +441,9 @@ export class RoomshiftPanel {
     // Compact cloud first (about a quarter of the size); the PLY if this backend doesn't serve it.
     const compact = await fetch(`${BASE}/api/scans/${s.id}/cloud.rsc`).catch(() => null);
     const buf = await (compact?.ok ? compact : await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
-    this.room.load(buf, s.shell);
+    const photos = Object.fromEntries((s.photoWalls ?? []).map((w) => [w.id, `${BASE}/api/scans/${s.id}/walls/${w.file}?v=${encodeURIComponent(s.updatedAt ?? '')}`]));
+    this.room.load(buf, s.shell, photos);
+    this.room.setClean(this.cleanView);
     // Objects before any world: a world's furniture is placed into these slots.
     this.room.setObjects(s.objects ?? []);
     this.frameRoom();

@@ -123,6 +123,8 @@ export interface Scan {
   /** Furniture found by Muse Spark + SAM 3.1 and lifted into the room frame (objects.ts). */
   objects?: ScanObject[];
   objectsStatus?: { state: 'running' | 'done' | 'failed' | 'skipped'; message: string; usage: string; models?: string[] };
+  /** The video projected onto the floor, ceiling and walls (photo-walls.ts), served at /api/scans/:id/walls/:file. */
+  photoWalls?: { id: string; file: string; width: number; height: number; seen: number }[];
 }
 
 export interface ScanObject {
