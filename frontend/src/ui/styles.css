@@ -669,3 +669,35 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Seg
 @media (min-width: 900px) { .rs-ask { font-size: 22px; } }
 .drop .mark-loader { width: 32px; height: 32px; margin-bottom: 4px; }
 .hint .mark-loader { width: 22px; height: 22px; }
+
+/* ---------------------------------------------------------------- tab bar + My Rooms */
+.tabbar { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); align-items: end; padding: 8px 12px 10px; border-top: 1px solid var(--line); background: var(--surface); }
+.tab { display: grid; justify-items: center; gap: 4px; padding: 4px 0; border: 0; background: none; color: var(--text-3); font-size: 12px; font-weight: 600; line-height: 1.2; cursor: pointer; }
+.tab .tab-ic { display: grid; place-items: center; height: 28px; }
+.tab:hover { color: var(--text-2); }
+.tab.on { color: var(--accent); }
+.tab.create .tab-ic { width: 52px; height: 34px; border-radius: 12px; background: var(--accent); color: #fff; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent); }
+.tab.create:hover .tab-ic { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.tab.create:not(.on) { color: var(--text-2); }
+@media (max-width: 899px) { #panel { padding-bottom: 0; } .tabbar { padding-bottom: max(10px, env(safe-area-inset-bottom)); } }
+
+.rooms-note { margin: -8px 0 16px; }
+.rooms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 12px; }
+.room-tile { position: relative; }
+.tile-main { display: grid; gap: 2px; width: 100%; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; color: inherit; }
+.tile-cover { position: relative; display: grid; place-items: center; aspect-ratio: 4 / 3; border-radius: 16px; overflow: hidden; background: var(--surface-2); color: var(--text-3); margin-bottom: 6px; }
+.tile-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform 0.25s ease; }
+.tile-main:hover .tile-cover img { transform: scale(1.03); }
+.room-tile.open .tile-cover { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.tile-badge { position: absolute; left: 8px; top: 8px; height: 22px; padding: 0 8px; border-radius: 99px; background: var(--accent); color: #fff; font: 600 11px/22px inherit; font-style: normal; }
+.tile-busy { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(30, 22, 16, 0.45); }
+.tile-name { font-size: 15px; font-weight: 650; line-height: 1.3; }
+.tile-meta { font-size: 13px; color: var(--text-2); line-height: 1.3; }
+.tile-forget { position: absolute; right: 8px; top: 8px; width: 26px; height: 26px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+  background: var(--glass-dark); color: #fff; opacity: 0; transition: opacity 0.15s; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.room-tile:hover .tile-forget, .tile-forget:focus-visible { opacity: 1; }
+@media (hover: none) { .tile-forget { opacity: 1; } }
+.rooms-empty { display: grid; justify-items: center; gap: 6px; text-align: center; padding: 36px 16px; border-radius: 20px; background: var(--surface-2); color: var(--text-2); font-size: 14px; }
+.rooms-empty > .ic { color: var(--accent); margin-bottom: 6px; }
+.rooms-empty b { color: var(--text); font-size: 17px; }
+.rooms-empty .btn { margin-top: 12px; }

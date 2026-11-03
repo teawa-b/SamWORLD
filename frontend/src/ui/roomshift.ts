@@ -25,6 +25,31 @@ const friendly = (err: unknown, said = 'Something went wrong. Please try again.'
   return said;
 };
 
+/** The rooms filmed or opened on this device, newest first. There is no account: this list is the device’s. */
+const MY_ROOMS = 'samworld.rooms';
+function myRooms(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(MY_ROOMS) ?? '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+function saveMyRooms(ids: string[]) {
+  try {
+    localStorage.setItem(MY_ROOMS, JSON.stringify(ids.slice(0, 50)));
+  } catch {
+    /* private mode: the list just isn't kept */
+  }
+}
+const rememberRoom = (id: string) => saveMyRooms([id, ...myRooms().filter((x) => x !== id)]);
+const forgetRoom = (id: string) => saveMyRooms(myRooms().filter((x) => x !== id));
+
+interface RoomTile {
+  scan: Scan;
+  worlds: string[];
+}
+
 const EXAMPLES: { label: string; prompt: string; icon: string }[] = [
   { label: 'Haunted library', prompt: 'haunted Victorian library', icon: 'book' },
   { label: 'Underwater cave', prompt: 'underwater coral cave', icon: 'waves' },
@@ -47,6 +72,7 @@ interface Scan {
   model: string | null;
   shell?: RoomShell | null;
   photoWalls?: { id: string; file: string }[];
+  createdAt?: string;
   updatedAt?: string;
   objects?: (RoomObject & { label: string; views: number; crop: string | null })[];
   objectsStatus?: { state: 'running' | 'done' | 'failed' | 'skipped'; message: string; usage: string };
@@ -139,6 +165,10 @@ export class RoomshiftPanel {
   /** The 3D room has been downloaded and drawn. */
   private roomShown = false;
   private openFailures = 0;
+  private view: 'room' | 'rooms' = 'room';
+  /** My Rooms, once loaded (null while loading). */
+  private tiles: RoomTile[] | null = null;
+  private tabbar: HTMLElement;
 
   constructor(
     private world: World,
@@ -148,6 +178,15 @@ export class RoomshiftPanel {
     this.room = new RoomScene(world);
     const stage = document.getElementById('stage')!;
     this.loader = new StageLoader(stage);
+    this.tabbar = document.createElement('nav');
+    this.tabbar.className = 'tabbar';
+    this.tabbar.setAttribute('aria-label', 'SamWORLD');
+    root.appendChild(this.tabbar);
+    this.tabbar.addEventListener('click', (e) => {
+      const t = (e.target as HTMLElement).closest('[data-tab]') as HTMLElement | null;
+      if (t) void this.goTab(t.dataset.tab as 'home' | 'create' | 'rooms');
+    });
+    document.querySelector('#topbar .brand')?.addEventListener('click', () => void this.goTab('home'));
     this.statusEl = document.createElement('div');
     this.statusEl.id = 'stage-status';
     this.statusEl.hidden = true;
@@ -180,15 +219,153 @@ export class RoomshiftPanel {
     const id = new URLSearchParams(location.search).get('scan');
     if (id) {
       this.scan = (await call<{ scan: Scan }>(`/api/scans/${id}`).catch(() => ({ scan: null as unknown as Scan }))).scan;
-      if (this.scan) this.follow();
+      if (this.scan) {
+        rememberRoom(this.scan.id);
+        this.follow();
+      }
     }
     this.render();
+  }
+
+  // ------------------------------------------------------------------------------------------ tabs
+
+  private async goTab(tab: 'home' | 'create' | 'rooms') {
+    if (tab === 'rooms') {
+      this.view = 'rooms';
+      this.tiles = null;
+      this.render();
+      await this.loadTiles();
+      return;
+    }
+    if (tab === 'create') {
+      if (this.busy) return;
+      this.view = 'room';
+      this.reset();
+      return;
+    }
+    // Home: the room you are in; with none open, your latest room; with none at all, filming one.
+    this.view = 'room';
+    const latest = myRooms()[0];
+    if (!this.scan && latest && !this.busy) await this.openScan(latest);
+    else this.render();
+  }
+
+  private async loadTiles() {
+    const ids = myRooms();
+    const tiles = await Promise.all(
+      ids.map(async (id) => {
+        const scan = (await call<{ scan: Scan }>(`/api/scans/${id}`).catch(() => null))?.scan;
+        if (!scan) return null;
+        const restyles = scan.state === 'ready' ? ((await call<{ restyles: Restyle[] }>(`/api/scans/${id}/restyles`).catch(() => null))?.restyles ?? []) : [];
+        const worlds = [...new Set(restyles.filter((r) => r.state === 'done' && !r.original).map((r) => r.plan?.title ?? cap(r.prompt)))];
+        return { scan, worlds };
+      }),
+    );
+    // Rooms the server no longer has drop off the list.
+    const found = tiles.filter((t): t is RoomTile => !!t);
+    if (found.length !== ids.length) saveMyRooms(found.map((t) => t.scan.id));
+    this.tiles = found;
+    if (this.view === 'rooms') this.render();
+  }
+
+  /** Open one of my rooms in place of whatever is open. */
+  private async openScan(id: string) {
+    if (this.scan?.id === id) {
+      this.view = 'room';
+      this.render();
+      return;
+    }
+    this.reset(false);
+    this.view = 'room';
+    const scan = (await call<{ scan: Scan }>(`/api/scans/${id}`).catch(() => null))?.scan;
+    if (!scan) {
+      forgetRoom(id);
+      this.render();
+      return;
+    }
+    this.scan = scan;
+    rememberRoom(id);
+    history.replaceState(null, '', `?scan=${id}${DEBUG ? '&debug' : ''}`);
+    this.follow();
+    this.render();
+  }
+
+  /** Close the open room (back to filming a new one). */
+  private reset(render = true) {
+    this.stopPolls();
+    if (app.mode.value === 'walk') exitRoom(this.world);
+    this.scan = null;
+    this.shown = null;
+    this.selected = null;
+    this.restyle = null;
+    this.history = [];
+    this.status = '';
+    this.error = '';
+    this.prompt = '';
+    this.room.clear();
+    this.roomShown = false;
+    this.openFailures = 0;
+    this.dropLocalFrames();
+    history.replaceState(null, '', location.pathname + (DEBUG ? '?debug' : ''));
+    if (render) this.render();
+  }
+
+  private renderTabs() {
+    const active = this.view === 'rooms' ? 'rooms' : this.scan ? 'home' : 'create';
+    const tab = (id: string, ic: string, label: string) =>
+      `<button class="tab${active === id ? ' on' : ''}${id === 'create' ? ' create' : ''}" data-tab="${id}"${active === id ? ' aria-current="page"' : ''}><span class="tab-ic">${icon(ic, id === 'create' ? 24 : 22)}</span><span>${label}</span></button>`;
+    const html = tab('home', 'home', 'Home') + tab('create', 'plus', 'Create') + tab('rooms', 'folder', 'My Rooms');
+    if (this.tabbar.innerHTML !== html) this.tabbar.innerHTML = html;
+  }
+
+  private roomsHtml(): string {
+    const brand = `<div class="desktop-brand"><img class="logo-light" src="${LOGO}samworld.png" alt="SamWORLD" width="153" height="28" /><img class="logo-dark" src="${LOGO}samworld-white.png" alt="SamWORLD" width="153" height="28" /></div>`;
+    const head = `${brand}<h2 class="rs-ask">My rooms</h2>`;
+    if (!this.tiles) return `${head}<div class="hint">${markSpinner()}<span>Finding your rooms…</span></div>`;
+    if (!this.tiles.length)
+      return `${head}<div class="rooms-empty">${icon('cube', 28)}<b>No rooms yet</b><span>Film a room and it’ll be kept here, with every world you turn it into.</span><button class="btn primary" data-tab-go="create">${icon('plus', 18)}Film your first room</button></div>`;
+    return `${head}<p class="small muted rooms-note">Rooms you’ve filmed on this device.</p>
+      <div class="rooms-grid">${this.tiles.map((t) => this.tileHtml(t)).join('')}</div>`;
+  }
+
+  private tileHtml({ scan, worlds }: RoomTile): string {
+    const open = scan.id === this.scan?.id;
+    const status =
+      scan.state === 'ready'
+        ? worlds.length
+          ? `${esc(worlds[0])}${worlds.length > 1 ? ` +${worlds.length - 1}` : ''}`
+          : 'No worlds yet'
+        : scan.state === 'failed'
+          ? 'Couldn’t be rebuilt'
+          : scan.state === 'reconstructing'
+            ? 'Building in 3D…'
+            : 'Not finished';
+    return `<div class="room-tile${open ? ' open' : ''}">
+        <button class="tile-main" data-action="open-room" data-id="${esc(scan.id)}">
+          <span class="tile-cover">${scan.frames.length ? `<img src="${BASE}/api/scans/${esc(scan.id)}/cover.jpg" alt="" loading="lazy" onerror="this.remove()" />` : icon('cube', 24)}${open ? '<i class="tile-badge">Open</i>' : ''}${scan.state === 'reconstructing' ? `<i class="tile-busy">${markSpinner('sm')}</i>` : ''}</span>
+          <span class="tile-name">${esc(roomName(scan))}</span>
+          <span class="tile-meta truncate">${status}</span>
+        </button>
+        <button class="tile-forget" data-action="forget-room" data-id="${esc(scan.id)}" aria-label="Remove ${esc(roomName(scan))} from this device" title="Remove from this device">${icon('close', 14)}</button>
+      </div>`;
   }
 
   // ------------------------------------------------------------------------------------------ rendering
 
   /** Full render when the screen changes; otherwise only the live part, so typing isn't interrupted. */
   private render() {
+    this.renderTabs();
+    if (this.view === 'rooms') {
+      this.phase = 'rooms';
+      const html = this.roomsHtml();
+      if (this.body.dataset.rooms !== html) {
+        this.body.innerHTML = html;
+        this.body.dataset.rooms = html;
+      }
+      this.renderStageNote();
+      return;
+    }
+    delete this.body.dataset.rooms;
     const s = this.scan;
     const phase = !s || s.state === 'collecting' ? `capture:${this.busy}` : s.state;
     if (phase !== this.phase || !this.body.querySelector('#rs-live')) {
@@ -369,6 +546,7 @@ export class RoomshiftPanel {
         this.localFrames = sample(frames.length, 10).map((i) => URL.createObjectURL(frames[i]));
       }
       const { scan } = await postJson<{ scan: Scan }>('/api/scans', { title: files[0].name.replace(/\.[^.]+$/, '') });
+      rememberRoom(scan.id);
       for (const [i, b] of frames.entries()) {
         this.loadTitle = 'Uploading your room';
         this.progress = (i + 1) / frames.length;
@@ -398,23 +576,17 @@ export class RoomshiftPanel {
   }
 
   private async onClick(e: Event) {
+    const go = (e.target as HTMLElement).closest('[data-tab-go]') as HTMLElement | null;
+    if (go) return void this.goTab(go.dataset.tabGo as 'create');
     const t = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
     if (!t) return;
     const a = t.dataset.action;
     if (a === 'pick') (this.body.querySelector('#capture') as HTMLInputElement).click();
-    if (a === 'new') {
-      this.stopPolls();
-      if (app.mode.value === 'walk') exitRoom(this.world);
-      this.scan = null;
-      this.shown = null;
-      this.selected = null;
-      this.restyle = null;
-      this.history = [];
-      this.status = '';
-      this.room.clear();
-      this.roomShown = false;
-      this.dropLocalFrames();
-      history.replaceState(null, '', location.pathname);
+    if (a === 'new') this.reset();
+    if (a === 'open-room' && t.dataset.id) await this.openScan(t.dataset.id);
+    if (a === 'forget-room' && t.dataset.id) {
+      forgetRoom(t.dataset.id);
+      this.tiles = this.tiles?.filter((x) => x.scan.id !== t.dataset.id) ?? null;
       this.render();
     }
     if (a === 'retry' && this.scan) {
@@ -658,6 +830,14 @@ export class RoomshiftPanel {
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 /** A step's time, left out when it is too short to be worth reading. */
+/** A room's display name: camera file names (IMG_4021) become “Room”, with the day it was filmed. */
+function roomName(s: Scan): string {
+  const raw = (s.title ?? '').trim();
+  const generic = !raw || /^(img|vid|mov|pxl|dsc|dji|gopr|video|my room)[\s_-]*\d*/i.test(raw) || /^\d[\d_ -]*$/.test(raw);
+  const day = s.createdAt ? new Date(s.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+  return generic ? (day ? `Room · ${day}` : 'Room') : raw;
+}
+
 /** Up to n evenly spread indexes out of count. */
 const sample = (count: number, n: number) => Array.from({ length: Math.min(count, n) }, (_, i) => Math.floor((i * count) / Math.min(count, n)));
 
