@@ -8,6 +8,7 @@ import { RoomScene, paintOrigin, type RoomObject, type SurfaceId } from '../scen
 import { app } from '../state.js';
 import { enterScanWalk, exitRoom, focusOrbit, scanXR } from '../systems/walkthrough.js';
 import { icon } from './icons.js';
+import { StageLoader, markSpinner } from './loader.js';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -16,6 +17,7 @@ const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '
 export const xrMode = { ar: false };
 
 /** `?debug` shows the technical details (models, timings, scan stats) that people using the app never need. */
+const LOGO = `${import.meta.env.BASE_URL}brand/`;
 const DEBUG = new URLSearchParams(location.search).has('debug');
 /** Something went wrong: keep the real reason in the console, show people a plain sentence. */
 const friendly = (err: unknown, said = 'Something went wrong. Please try again.') => {
@@ -23,7 +25,14 @@ const friendly = (err: unknown, said = 'Something went wrong. Please try again.'
   return said;
 };
 
-const EXAMPLES = ['haunted Victorian library', 'underwater coral cave', '1970s Tokyo arcade', 'enchanted forest cabin', 'spaceship bridge', 'Egyptian tomb'];
+const EXAMPLES: { label: string; prompt: string; icon: string }[] = [
+  { label: 'Haunted library', prompt: 'haunted Victorian library', icon: 'book' },
+  { label: 'Underwater cave', prompt: 'underwater coral cave', icon: 'waves' },
+  { label: 'Space station', prompt: 'spaceship bridge', icon: 'rocket' },
+  { label: 'Forest cabin', prompt: 'enchanted forest cabin', icon: 'tree' },
+  { label: 'Tokyo arcade', prompt: '1970s Tokyo arcade', icon: 'gamepad' },
+  { label: 'Egyptian tomb', prompt: 'Egyptian tomb', icon: 'pyramid' },
+];
 
 interface Scan {
   id: string;
@@ -74,7 +83,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const postJson = <T>(path: string, body: unknown) => call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 /** ~1.5 frames per second of video (12–40 frames), longest side ≤ 1024 px, as JPEG blobs. */
-export async function framesFromVideo(file: File, onProgress: (n: number, total: number) => void): Promise<Blob[]> {
+export async function framesFromVideo(file: File, onProgress: (n: number, total: number, frame: Blob) => void): Promise<Blob[]> {
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
   v.muted = true;
@@ -96,7 +105,7 @@ export async function framesFromVideo(file: File, onProgress: (n: number, total:
     await new Promise<void>((res) => (v.onseeked = () => res()));
     g.drawImage(v, 0, 0, c.width, c.height);
     out.push(await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/jpeg', 0.88)));
-    onProgress(i + 1, total);
+    onProgress(i + 1, total, out[out.length - 1]);
   }
   URL.revokeObjectURL(url);
   return out;
@@ -121,6 +130,14 @@ export class RoomshiftPanel {
   private boxesOn = true;
   /** Hide the scan's points (surfaces, pictures and 3D furniture only). */
   private cleanView = false;
+  private loader: StageLoader;
+  private statusEl: HTMLElement;
+  /** Frames from this session's upload (object URLs), shown pixelated while the room is built. */
+  private localFrames: string[] = [];
+  private progress: number | null = null;
+  private loadTitle = '';
+  /** The 3D room has been downloaded and drawn. */
+  private roomShown = false;
 
   constructor(
     private world: World,
@@ -128,8 +145,15 @@ export class RoomshiftPanel {
   ) {
     this.body = root.querySelector('#panel-body') as HTMLElement;
     this.room = new RoomScene(world);
+    const stage = document.getElementById('stage')!;
+    this.loader = new StageLoader(stage);
+    this.statusEl = document.createElement('div');
+    this.statusEl.id = 'stage-status';
+    this.statusEl.hidden = true;
+    stage.appendChild(this.statusEl);
     this.body.addEventListener('change', (e) => void this.onChange(e));
     this.body.addEventListener('click', (e) => void this.onClick(e));
+    document.getElementById('stage-controls')?.addEventListener('click', (e) => void this.onClick(e));
     this.body.addEventListener('input', (e) => {
       const el = e.target as HTMLInputElement;
       if (el.id === 'rs-prompt') this.prompt = el.value;
@@ -180,19 +204,50 @@ export class RoomshiftPanel {
     const note = document.getElementById('stage-note');
     if (!note) return;
     const s = this.scan;
-    const html =
-      !s || s.state === 'collecting'
-        ? `<div class="sn-ic">${icon('cube', 22)}</div><b>Your room appears here</b><span>In 3D, at its real size</span>`
-        : s.state === 'reconstructing' || (s.state === 'ready' && !this.shown)
-          ? `<span class="spinner"></span><b>Building your room in 3D</b><span>About a minute</span>`
-          : '';
+    const building = !!s && (s.state === 'reconstructing' || (s.state === 'ready' && !this.roomShown));
+    const frames = this.localFrames.length ? this.localFrames : s && s.frames.length ? sample(s.frames.length, 10).map((i) => `${BASE}/api/scans/${s.id}/frames/${i}`) : [];
+    this.loader.show(
+      this.busy
+        ? { title: this.loadTitle, sub: this.progress != null ? `${Math.round(this.progress * 100)}%` : 'Keep this page open', progress: this.progress, frames }
+        : building
+          ? { title: s!.state === 'ready' ? 'Opening your room' : 'Building your room in 3D', sub: s!.state === 'ready' ? 'Almost there' : 'This usually takes about a minute', progress: null, frames }
+          : null,
+    );
+    const html = (!s || s.state === 'collecting') && !this.busy ? `<div class="sn-ic">${icon('cube', 22)}</div><b>Your room appears here</b><span>In 3D, at its real size</span>` : '';
     note.hidden = !html;
     if (html && note.innerHTML !== html) note.innerHTML = html;
+    this.renderStageControls();
+  }
+
+  /** Round buttons over the 3D view: walk in / back out, scan dots, outlines, and back to your own room. */
+  private renderStageControls() {
+    const el = document.getElementById('stage-controls');
+    if (!el) return;
+    const s = this.scan;
+    const sh = s?.shell;
+    const r = this.restyle;
+    const walking = app.mode.value === 'walk';
+    const btn = (action: string, ic: string, label: string, on?: boolean) =>
+      `<button class="fab${on ? ' on' : ''}" data-action="${action}" aria-label="${label}" title="${label}"${on != null ? ` aria-pressed="${on}"` : ''}>${icon(ic, 22)}</button>`;
+    const html =
+      s?.state === 'ready' && this.shown
+        ? `<div class="fab-col left">${r && !r.original ? btn('original', 'undo', 'Back to your room') : ''}</div>
+           <div class="fab-col right">
+             ${sh && !sh.fallback ? btn('walk', walking ? 'cube' : 'walk', walking ? 'Back to the overview' : 'Walk inside', walking) : ''}
+             ${btn('clean', this.cleanView ? 'eyeOff' : 'eye', this.cleanView ? 'Show scan dots' : 'Hide scan dots', !this.cleanView)}
+             ${s.objects?.length ? btn('boxes', 'frame', this.boxesOn ? 'Hide furniture outlines' : 'Show furniture outlines', this.boxesOn) : ''}
+           </div>`
+        : '';
+    if (el.innerHTML !== html) el.innerHTML = html;
+    const step = r && r.state !== 'done' && r.state !== 'failed' && !r.original ? currentStep(r) : '';
+    this.statusEl.hidden = !step;
+    const pill = step ? `${markSpinner('sm')}<span>${esc(step)}</span>` : '';
+    if (this.statusEl.innerHTML !== pill) this.statusEl.innerHTML = pill;
   }
 
   private renderAll() {
     const s = this.scan;
-    const brand = `<div class="desktop-brand">Roomshift</div>`;
+    const brand = `<div class="desktop-brand"><img class="logo-light" src="${LOGO}samworld.png" alt="SamWORLD" width="153" height="28" /><img class="logo-dark" src="${LOGO}samworld-white.png" alt="SamWORLD" width="153" height="28" /></div>`;
     if (!s || s.state === 'collecting') {
       this.body.innerHTML = `${brand}
         ${stepper(1, 'Film your room')}
@@ -208,28 +263,33 @@ export class RoomshiftPanel {
         </ol>`;
       return;
     }
-    const head = `${brand}<div class="view-head"><button class="icon-btn" data-action="new" aria-label="Film another room" title="Film another room">${icon('back')}</button><div class="grow"><div class="rs-title truncate">${esc(s.title)}</div>${s.shell && !s.shell.fallback ? `<div class="sub">${s.shell.size.width.toFixed(1)} × ${s.shell.size.depth.toFixed(1)} m</div>` : ''}</div></div>`;
+    const size = s.shell && !s.shell.fallback ? ` · ${s.shell.size.width.toFixed(1)} × ${s.shell.size.depth.toFixed(1)} m` : '';
+    const sub = s.state === 'ready' ? (size ? `Rebuilt${size}` : 'Scanned and rebuilt') : s.state === 'failed' ? 'Couldn’t be rebuilt' : 'Building in 3D…';
+    const head = `${brand}<div class="room-head">
+        <div class="room-cover">${s.frames.length ? `<img src="${BASE}/api/scans/${esc(s.id)}/cover.jpg" alt="" onerror="this.remove()" />` : ''}</div>
+        <div class="grow"><div class="rs-title">Your room</div><div class="sub truncate">${sub}</div></div>
+        <button class="btn soft" data-action="new">New room</button>
+      </div>`;
     if (s.state !== 'ready') {
       this.body.innerHTML = `${head}${stepper(1, s.state === 'failed' ? 'Film your room' : 'Building your room')}<div id="rs-live"></div>`;
       return;
     }
     this.body.innerHTML = `${head}
-      ${stepper(2, 'Type a world')}
       <h2 class="rs-ask">What should your room become?</h2>
       <form class="composer" id="rs-form" autocomplete="off">
-        <input id="rs-prompt" placeholder="e.g. haunted Victorian library" maxlength="300" value="${esc(this.prompt)}" aria-label="Describe a world" />
+        <input id="rs-prompt" placeholder="Describe a world…" maxlength="300" value="${esc(this.prompt)}" aria-label="Describe a world" />
         <button class="btn primary" type="submit">Shift${icon('arrow', 16)}</button>
       </form>
-      <div class="scroller rs-examples">${EXAMPLES.map((x) => `<button class="chip" data-action="example" data-prompt="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+      <div class="scroller rs-examples">${EXAMPLES.map((x) => `<button class="chip" data-action="example" data-prompt="${esc(x.prompt)}">${icon(x.icon, 18)}${esc(x.label)}</button>`).join('')}</div>
       <div id="rs-live"></div>`;
   }
 
   private liveHtml(): string {
     const s = this.scan;
     if (!s || s.state === 'collecting')
-      return `<div class="drop${this.busy ? ' busy' : ''}" data-action="pick" tabindex="0" role="button" aria-busy="${this.busy}">${this.busy ? '<span class="spinner"></span>' : icon('video', 24)}<b>${this.busy ? esc(this.status) : 'Choose a video of your room'}</b><span class="xs muted">${this.busy ? 'Keep this page open' : 'Or choose 15–40 photos of it'}</span></div>
+      return `<div class="drop${this.busy ? ' busy' : ''}" data-action="pick" tabindex="0" role="button" aria-busy="${this.busy}">${this.busy ? markSpinner() : icon('video', 24)}<b>${this.busy ? esc(this.status) : 'Choose a video of your room'}</b><span class="xs muted">${this.busy ? 'Keep this page open' : 'Or choose 15–40 photos of it'}</span></div>
         ${this.status && !this.busy ? `<div class="callout">${icon('alert')}<div>${esc(this.status)}</div></div>` : ''}`;
-    if (s.state === 'reconstructing') return `<div class="hint"><span class="spinner"></span><span>Building your room in 3D…</span></div><p class="xs faint">This usually takes about a minute. Your room appears as soon as it’s ready.</p>`;
+    if (s.state === 'reconstructing') return `<p class="small muted">This usually takes about a minute. Your room appears as soon as it’s ready.</p>`;
     if (s.state === 'failed') return `<div class="callout">${icon('alert')}<div><b>We couldn’t build your room.</b> Try again, or film it once more a little slower with every wall in view.</div></div><div class="rs-retry"><button class="btn primary" data-action="retry">Try again</button><button class="btn" data-action="new">Film again</button></div>${DEBUG ? `<p class="xs faint">${esc(s.message)}</p>` : ''}`;
 
     const sec = (k: string) => (s.timings[k] != null ? `${s.timings[k]} s` : '—');
@@ -254,13 +314,6 @@ export class RoomshiftPanel {
       ${sh?.fallback ? `<div class="callout">${icon('alert')}<div><b>We couldn’t make out all of your walls,</b> so this room can’t become a new world yet. Try filming again a little slower, with every wall and some floor in view.</div></div>` : ''}
       ${this.objectsHtml(s)}
       ${steps}
-      <div class="level-label">View</div>
-      <div class="viewbar" role="toolbar" aria-label="View">
-        ${sh && !sh.fallback ? `<button class="vb${walking ? ' on' : ''}" data-action="walk" aria-pressed="${walking}">${icon(walking ? 'cube' : 'walk', 18)}<span>${walking ? 'Overview' : 'Walk inside'}</span></button>` : ''}
-        <button class="vb${this.cleanView ? '' : ' on'}" data-action="clean" aria-pressed="${!this.cleanView}">${icon(this.cleanView ? 'eyeOff' : 'eye', 18)}<span>Scan dots</span></button>
-        ${s.objects?.length ? `<button class="vb${this.boxesOn ? ' on' : ''}" data-action="boxes" aria-pressed="${this.boxesOn}">${icon('frame', 18)}<span>Outlines</span></button>` : ''}
-        ${r && !r.original ? `<button class="vb" data-action="original">${icon('reset', 18)}<span>My room</span></button>` : ''}
-      </div>
       <p class="xs faint rs-controls">${walking ? 'Drag to look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move · <kbd>Esc</kbd> to leave' : 'Drag to orbit · scroll to zoom'}</p>
       ${past.length ? `<div class="level-label">Earlier worlds</div><div class="scroller">${past.map((h) => `<button class="chip" data-action="replay" data-id="${esc(h.id)}">${esc(h.plan?.title ?? h.prompt)}</button>`).join('')}</div>` : ''}
       ${DEBUG ? `<details class="rs-details"><summary>Scan details${icon('down', 16)}</summary>
@@ -281,7 +334,7 @@ export class RoomshiftPanel {
   private objectsHtml(s: Scan): string {
     const st = s.objectsStatus;
     if (!st) return '';
-    if (st.state === 'running') return `<div class="hint" style="margin-top:12px"><span class="spinner"></span><span>Finding your furniture…</span></div>`;
+    if (st.state === 'running') return `<div class="hint" style="margin-top:12px">${markSpinner()}<span>Finding your furniture…</span></div>`;
     if (st.state === 'skipped') return DEBUG ? `<p class="xs faint" style="margin:12px 0 0">${esc(st.message)}</p>` : '';
     if (st.state === 'failed') return `<div class="callout" style="margin-top:12px">${icon('alert')}<div><b>We couldn’t pick out your furniture.</b> Your room still works without it.</div></div><button class="btn small" data-action="find-objects">Look again</button>`;
     const list = s.objects ?? [];
@@ -303,16 +356,26 @@ export class RoomshiftPanel {
     try {
       let frames: Blob[];
       if (files.length === 1 && files[0].type.startsWith('video/')) {
-        frames = await framesFromVideo(files[0], (n, t) => this.setStatus(`Getting your video ready… ${Math.round((n / t) * 100)}%`));
+        this.loadTitle = 'Getting your video ready';
+        frames = await framesFromVideo(files[0], (n, t, f) => {
+          if (n % 3 === 1 || n === t) this.localFrames.push(URL.createObjectURL(f));
+          this.progress = n / t;
+          this.setStatus(`Getting your video ready… ${Math.round((n / t) * 100)}%`);
+        });
       } else {
         frames = files.filter((f) => f.type.startsWith('image/')).slice(0, 60);
         if (frames.length < 4) throw new Error('Choose a video, or at least 4 photos.');
+        this.localFrames = sample(frames.length, 10).map((i) => URL.createObjectURL(frames[i]));
       }
       const { scan } = await postJson<{ scan: Scan }>('/api/scans', { title: files[0].name.replace(/\.[^.]+$/, '') });
       for (const [i, b] of frames.entries()) {
+        this.loadTitle = 'Uploading your room';
+        this.progress = (i + 1) / frames.length;
         this.setStatus(`Uploading… ${Math.round(((i + 1) / frames.length) * 100)}%`);
         await call(`/api/scans/${scan.id}/frames`, { method: 'POST', headers: { 'content-type': b.type || 'image/jpeg' }, body: b });
       }
+      this.loadTitle = 'Starting to build';
+      this.progress = null;
       this.setStatus('Almost there…');
       history.replaceState(null, '', `?scan=${scan.id}${DEBUG ? '&debug' : ''}`);
       this.scan = (await postJson<{ scan: Scan }>(`/api/scans/${scan.id}/reconstruct`, {})).scan;
@@ -321,6 +384,8 @@ export class RoomshiftPanel {
       this.follow();
     } catch (err) {
       this.busy = false;
+      this.progress = null;
+      this.dropLocalFrames();
       this.status = friendly(err, (err as Error).message.startsWith('Choose') || (err as Error).message.startsWith('This video') ? (err as Error).message : 'We couldn’t upload that. Please try again.');
     }
     this.render();
@@ -346,6 +411,8 @@ export class RoomshiftPanel {
       this.history = [];
       this.status = '';
       this.room.clear();
+      this.roomShown = false;
+      this.dropLocalFrames();
       history.replaceState(null, '', location.pathname);
       this.render();
     }
@@ -472,6 +539,9 @@ export class RoomshiftPanel {
     const buf = await (compact?.ok ? compact : await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
     const photos = Object.fromEntries((s.photoWalls ?? []).map((w) => [w.id, `${BASE}/api/scans/${s.id}/walls/${w.file}?v=${encodeURIComponent(s.updatedAt ?? '')}`]));
     this.room.load(buf, s.shell, photos);
+    this.roomShown = true;
+    this.dropLocalFrames();
+    this.render();
     this.room.setClean(this.cleanView);
     // Objects before any world: a world's furniture is placed into these slots.
     this.room.setObjects(s.objects ?? []);
@@ -559,6 +629,11 @@ export class RoomshiftPanel {
     }
   }
 
+  private dropLocalFrames() {
+    for (const u of this.localFrames) URL.revokeObjectURL(u);
+    this.localFrames = [];
+  }
+
   private stopPolls() {
     if (this.poll) clearInterval(this.poll);
     if (this.rpoll) clearInterval(this.rpoll);
@@ -568,6 +643,19 @@ export class RoomshiftPanel {
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 /** A step's time, left out when it is too short to be worth reading. */
+/** Up to n evenly spread indexes out of count. */
+const sample = (count: number, n: number) => Array.from({ length: Math.min(count, n) }, (_, i) => Math.floor((i * count) / Math.min(count, n)));
+
+/** What a world in progress is doing right now, in plain words. */
+function currentStep(r: Restyle): string {
+  if (!r.plan) return 'Imagining the world…';
+  const surf = r.surfaces.find((x) => x.state === 'running') ?? r.surfaces.find((x) => x.state === 'pending');
+  if (surf) return `${SURFACE_STEP[surf.id] ?? cap(surf.id)}…`;
+  const obj = (r.objects ?? []).find((x) => x.state === 'restyling' || x.state === 'lifting') ?? (r.objects ?? []).find((x) => x.state === 'pending');
+  if (obj) return `Restyling the ${obj.name.toLowerCase()}…`;
+  return 'Finishing touches…';
+}
+
 const SURFACE_STEP: Record<string, string> = { walls: 'Painting the walls', floor: 'Laying the floor', ceiling: 'Painting the ceiling' };
 const secs = (n: number | null) => (n != null && n >= 0.5 ? `${n} s` : '');
 

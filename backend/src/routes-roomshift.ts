@@ -215,6 +215,25 @@ export async function registerRoomshiftRoutes(app: FastifyInstance) {
     return reply.send(createReadStream(join(scanDir(scanId), o.crop)));
   });
 
+  /** The room's cover picture: a frame from early in the walk-round (the first is often blurred or of the floor). */
+  app.get('/api/scans/:scanId/cover.jpg', async (req, reply) => {
+    const scan = requireScan((req.params as { scanId: string }).scanId);
+    const f = scan.frames[Math.min(scan.frames.length - 1, 2)];
+    if (!f || !existsSync(join(scanDir(scan.id), f.file))) throw new HttpError(404, 'NOT_FOUND', 'No frames yet');
+    reply.header('content-type', f.file.endsWith('.png') ? 'image/png' : f.file.endsWith('.webp') ? 'image/webp' : 'image/jpeg').header('cache-control', 'public, max-age=3600');
+    return reply.send(createReadStream(join(scanDir(scan.id), f.file)));
+  });
+
+  /** One of the frames that was sent, for the pixelated loading screen while the room is rebuilt. */
+  app.get('/api/scans/:scanId/frames/:index', async (req, reply) => {
+    const { scanId, index } = req.params as { scanId: string; index: string };
+    const scan = requireScan(scanId);
+    const f = scan.frames[Number.parseInt(index, 10)];
+    if (!f || !existsSync(join(scanDir(scan.id), f.file))) throw new HttpError(404, 'NOT_FOUND', 'No such frame');
+    reply.header('content-type', f.file.endsWith('.png') ? 'image/png' : f.file.endsWith('.webp') ? 'image/webp' : 'image/jpeg').header('cache-control', 'public, max-age=3600');
+    return reply.send(createReadStream(join(scanDir(scan.id), f.file)));
+  });
+
   /** Same points as cloud.ply in the compact format, sent gzip-encoded (the browser unpacks it). */
   app.get('/api/scans/:scanId/cloud.rsc', async (req, reply) => {
     const scan = requireScan((req.params as { scanId: string }).scanId);

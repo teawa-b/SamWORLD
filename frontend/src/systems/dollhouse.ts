@@ -223,9 +223,9 @@ export class DollhouseSystem extends createSystem({
       root.setValue(IBLGradient, '_needsUpdate', true);
     }
     if (root.hasComponent(DomeGradient)) {
-      root.getVectorView(DomeGradient, 'sky').set(night ? [0.02, 0.03, 0.08, 1] : [0.2423, 0.6172, 0.8308, 1]);
-      root.getVectorView(DomeGradient, 'equator').set(night ? [0.06, 0.07, 0.12, 1] : [0.6584, 0.7084, 0.7913, 1]);
-      root.getVectorView(DomeGradient, 'ground').set(night ? [0.03, 0.03, 0.04, 1] : [0.807, 0.7758, 0.7454, 1]);
+      root.getVectorView(DomeGradient, 'sky').set(night ? [0.02, 0.03, 0.08, 1] : [0.29, 0.25, 0.22, 1]);
+      root.getVectorView(DomeGradient, 'equator').set(night ? [0.06, 0.07, 0.12, 1] : [0.62, 0.56, 0.5, 1]);
+      root.getVectorView(DomeGradient, 'ground').set(night ? [0.03, 0.03, 0.04, 1] : [0.8, 0.75, 0.69, 1]);
       root.setValue(DomeGradient, '_needsUpdate', true);
     }
   }

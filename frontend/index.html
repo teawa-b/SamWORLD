@@ -4,16 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#eef0f3" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#0e1013" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%232f6fed'/%3E%3Cpath d='M6 12 12 7l6 5v6H6z' fill='white'/%3E%3C/svg%3E" />
-    <title>Roomshift</title>
+    <meta name="theme-color" content="#f6f1ea" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" href="./brand/mark.png" />
+    <link rel="apple-touch-icon" href="./brand/mark.png" />
+    <title>SamWORLD</title>
   </head>
   <body>
-    <main id="stage"><div id="scene-container"></div><div id="stage-note" hidden></div></main>
+    <main id="stage"><div id="scene-container"></div><div id="stage-note" hidden></div><div id="stage-controls"></div></main>
     <div id="map" aria-label="Map. Tap a place to see listings nearby."></div>
     <div id="topbar">
-      <button class="pill brand" data-action="home" aria-label="Roomshift home">Roomshift</button>
+      <button class="pill brand" data-action="home" aria-label="SamWORLD home"><img src="./brand/samworld-white.png" alt="SamWORLD" width="131" height="24" /></button>
       <div class="top-right">
         <span class="pill status" id="status-pill" hidden></span>
         <button class="pill" id="enter-xr" hidden></button>
@@ -23,6 +24,7 @@
       <div class="sheet-grip" role="button" aria-label="Resize panel"><span></span></div>
       <div id="panel-body"></div>
     </aside>
+    <div id="splash" aria-label="Loading SamWORLD"><span class="mark-loader xl"><img src="./brand/mark.png" alt="" /></span><img class="splash-word" src="./brand/samworld.png" alt="SamWORLD" width="153" height="28" /></div>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

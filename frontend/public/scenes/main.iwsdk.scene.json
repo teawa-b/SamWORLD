@@ -3,9 +3,9 @@
   "units": "meters",
   "components": {
     "com.iwsdk.components.DomeGradient": {
-      "sky": [0.2423, 0.6172, 0.8308, 1],
-      "equator": [0.6584, 0.7084, 0.7913, 1],
-      "ground": [0.807, 0.7758, 0.7454, 1],
+      "sky": [0.29, 0.25, 0.22, 1],
+      "equator": [0.62, 0.56, 0.5, 1],
+      "ground": [0.8, 0.75, 0.69, 1],
       "intensity": 1
     },
     "com.iwsdk.components.IBLGradient": {

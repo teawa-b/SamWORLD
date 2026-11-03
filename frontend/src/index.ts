@@ -50,9 +50,13 @@ xrButton.innerHTML = `${icon('headset', 18)}VR`;
 xrButton.title = 'Stand where you started filming, facing the same way, then enter VR';
 const arButton = xrButton.cloneNode() as HTMLButtonElement;
 arButton.id = 'enter-ar';
-arButton.innerHTML = `${icon('headset', 18)}AR`;
+arButton.innerHTML = `${icon('phone', 18)}AR`;
 arButton.title = 'Passthrough: your real room with the new world painted over it. Stand where you started filming first.';
-xrButton.after(arButton);
+// VR and AR read as one control, the way a camera app pairs its modes.
+const xrGroup = document.createElement('div');
+xrGroup.className = 'xr-group';
+xrButton.replaceWith(xrGroup);
+xrGroup.append(xrButton, arButton);
 if (import.meta.env.VITE_ENABLE_XR !== 'false') {
   navigator.xr
     ?.isSessionSupported(SessionMode.ImmersiveVR)
@@ -95,3 +99,7 @@ sheet.set('half');
 const panel = new RoomshiftPanel(world, panelEl);
 await panel.start();
 frame();
+// The first frame is drawn: fade the splash out.
+const splash = document.getElementById('splash');
+splash?.classList.add('gone');
+splash?.addEventListener('transitionend', () => splash.remove());

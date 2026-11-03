@@ -114,7 +114,7 @@ async function runRestyle(scan: Scan, r: Restyle) {
       const { data, model } = await museJson<PlanReply>({
         budget,
         system:
-          'You are the art director of Roomshift: a real room has been scanned in 3D, and the user types a world it should become. ' +
+          'You are the art director of SamWORLD: a real room has been scanned in 3D, and the user types a world it should become. ' +
           'Write a plan that repaints the room’s surfaces so it convincingly becomes that world while keeping its real shape. ' +
           'For walls, floor and ceiling: `prompt` describes ONE seamless, tileable material texture seen flat and straight-on (material, colour, pattern, wear, small details; no objects, no perspective, no people, no text), ' +
           '`colorHex` is its average colour (#rrggbb) and `tileMetres` how many metres one tile of the texture covers (0.5–4). ' +

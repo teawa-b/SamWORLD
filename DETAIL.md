@@ -1,16 +1,16 @@
-# Roomshift — type a world, and your room becomes it
+# SamWORLD — type a world, and your room becomes it
 
 _Working title. Built on the ViewIn/WalkIn codebase for the Meta Global AI Developer Hackathon (indie track: judged on creativity, technical ambition, and whether it works). Submissions due **Wed 4 Nov 2026, 9:00 PM ET**._
 
 ## The idea in one paragraph
 
-Film a 30-second walk around your room on your phone. Roomshift rebuilds it in 3D at real scale with Meta's **MapAnything**, understands what everything is with **SAM 3.1** and **Muse Spark**, and waits. You type a world — _"haunted Victorian library"_, _"underwater coral cave"_, _"1970s Tokyo arcade"_. **Muse Spark** turns that into a plan for every surface and object in _your_ room; **Muse Image** paints the new walls, floor and ceiling and restyles each piece of your furniture; **SAM 3D** turns each restyled piece into a real 3D object standing exactly where your real one stands. Then the room transforms around you — in the browser or at 1:1 on a **Meta Quest** — the paint spreading across your actual walls as each part arrives. Your sofa becomes a chesterfield; your bookcase becomes coral.
+Film a 30-second walk around your room on your phone. SamWORLD rebuilds it in 3D at real scale with Meta's **MapAnything**, understands what everything is with **SAM 3.1** and **Muse Spark**, and waits. You type a world — _"haunted Victorian library"_, _"underwater coral cave"_, _"1970s Tokyo arcade"_. **Muse Spark** turns that into a plan for every surface and object in _your_ room; **Muse Image** paints the new walls, floor and ceiling and restyles each piece of your furniture; **SAM 3D** turns each restyled piece into a real 3D object standing exactly where your real one stands. Then the room transforms around you — in the browser or at 1:1 on a **Meta Quest** — the paint spreading across your actual walls as each part arrives. Your sofa becomes a chesterfield; your bookcase becomes coral.
 
 Why it matters for judging: every Meta model has a visible, essential job (MapAnything → geometry, SAM 3.1 → objects, Muse Spark → reasoning and planning, Muse Image → generation, SAM 3D → objects in 3D, Quest/IWSDK → being inside it). One-sentence pitch, one "wow" moment, works on any room.
 
 ## What the user does (demo script, ~2 min)
 
-1. Opens Roomshift on a phone or laptop, uploads a 20–40 s walk-around video of a room (or ~20 photos).
+1. Opens SamWORLD on a phone or laptop, uploads a 20–40 s walk-around video of a room (or ~20 photos).
 2. ~1 minute later: a 3D model of _their_ room, objects outlined and named ("sofa", "bookshelf", "rug", "window", "wall", "floor").
 3. Types a prompt. Optionally taps an object and adds a note ("make the TV a fish tank").
 4. Watches the room repaint: walls and floor fill in surface by surface, each piece of furniture dissolves into its new version as SAM 3D returns it.
