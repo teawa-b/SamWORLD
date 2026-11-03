@@ -539,3 +539,5 @@ a.bookmarklet { cursor: grab; text-decoration: none; }
 #stage-note .sn-ic { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--glass); border: 1px solid var(--line); color: var(--text-2); box-shadow: var(--shadow-sm); }
 #stage-note .spinner { width: 28px; height: 28px; border-width: 2.5px; }
 @media (max-width: 899px) { #stage-note { top: calc((100dvh - var(--sheet-h, 60dvh)) / 2 + 20px); } }
+.rs-retry { display: flex; gap: 8px; }
+.rs-retry .btn { flex: 1; }
