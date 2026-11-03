@@ -138,6 +138,7 @@ export class RoomshiftPanel {
   private loadTitle = '';
   /** The 3D room has been downloaded and drawn. */
   private roomShown = false;
+  private openFailures = 0;
 
   constructor(
     private world: World,
@@ -301,9 +302,9 @@ export class RoomshiftPanel {
           <div class="world-top"><b>${esc(r.original ? 'Your room' : (r.plan?.title ?? cap(r.prompt)))}</b>${r.state === 'done' ? '<span class="tag ok">Ready</span>' : ''}</div>
           ${r.plan?.brief && !r.offline ? `<p class="small muted world-brief">${esc(r.plan.brief)}</p>` : ''}
           <ul class="steps compact">
-            ${stepLi(r.plan ? 'done' : r.state === 'failed' ? 'failed' : 'active', 'Imagining the world', DEBUG && !r.offline ? 'Muse Spark' : '')}
+            ${r.original ? '' : stepLi(r.plan || r.state === 'done' ? 'done' : r.state === 'failed' ? 'failed' : 'active', 'Imagining the world', DEBUG && !r.offline ? 'Muse Spark' : '')}
             ${r.surfaces.map((x) => stepLi(x.state === 'done' ? 'done' : x.state === 'failed' ? 'failed' : x.state === 'running' ? 'active' : '', SURFACE_STEP[x.id] ?? cap(x.id), DEBUG && x.state === 'done' ? secs(x.seconds) : '', DEBUG ? x.error : null)).join('')}
-            ${(r.objects ?? []).map((x) => stepLi(x.state === 'done' ? 'done' : x.state === 'failed' ? 'failed' : x.state === 'pending' ? '' : 'active', `Restyling the ${x.name.toLowerCase()}`, DEBUG ? (x.state === 'restyling' ? 'Muse Image' : x.state === 'lifting' ? 'SAM 3D' : x.state === 'done' ? secs(x.seconds) : '') : '', DEBUG ? x.error : null)).join('')}
+            ${(r.objects ?? []).map((x) => stepLi(x.state === 'done' ? 'done' : x.state === 'failed' ? 'failed' : x.state === 'pending' ? '' : 'active', r.original ? `Rebuilding the ${x.name.toLowerCase()} in 3D` : `Restyling the ${x.name.toLowerCase()}`, DEBUG ? (x.state === 'restyling' ? 'Muse Image' : x.state === 'lifting' ? 'SAM 3D' : x.state === 'done' ? secs(x.seconds) : '') : '', DEBUG ? x.error : null)).join('')}
           </ul>
           ${r.state === 'failed' || r.surfaces.some((x) => x.state === 'failed') ? `<p class="xs error-text" style="margin:8px 0 0">Some of this world didn’t come out. Try again, or pick another world.</p>${DEBUG ? `<p class="xs faint">${esc(r.message)}</p>` : ''}` : ''}
         </div>`
@@ -512,7 +513,19 @@ export class RoomshiftPanel {
         const key = `${s.id}:${s.cloud?.file}:${JSON.stringify(s.shell?.inner ?? [])}:${(s.photoWalls ?? []).length}`;
         if (this.shown !== key) {
           this.shown = key;
-          await this.showRoom();
+          try {
+            await this.showRoom();
+            this.openFailures = 0;
+          } catch (err) {
+            // A dropped download on a phone: try again on the next tick, and say so after a few tries.
+            this.shown = null;
+            if (++this.openFailures >= 3) {
+              this.roomShown = true;
+              this.error = friendly(err, 'We couldn’t open your room. Check your connection and reload the page.');
+            }
+            this.render();
+            return;
+          }
         }
         this.room.setObjects(s.objects ?? []);
         this.room.highlight(this.selected);
@@ -536,7 +549,9 @@ export class RoomshiftPanel {
     scanXR.target = s.shell && !s.shell.fallback ? filmingStart(s.cameras, s.shell.alignment) : null;
     // Compact cloud first (about a quarter of the size); the PLY if this backend doesn't serve it.
     const compact = await fetch(`${BASE}/api/scans/${s.id}/cloud.rsc`).catch(() => null);
-    const buf = await (compact?.ok ? compact : await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`)).arrayBuffer();
+    const res = compact?.ok ? compact : await fetch(`${BASE}/api/scans/${s.id}/cloud.ply`);
+    if (!res.ok) throw new Error(`Room download failed: ${res.status}`);
+    const buf = await res.arrayBuffer();
     const photos = Object.fromEntries((s.photoWalls ?? []).map((w) => [w.id, `${BASE}/api/scans/${s.id}/walls/${w.file}?v=${encodeURIComponent(s.updatedAt ?? '')}`]));
     this.room.load(buf, s.shell, photos);
     this.roomShown = true;
