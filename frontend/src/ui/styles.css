@@ -69,7 +69,7 @@ img { display: block; max-width: 100%; }
   backdrop-filter: blur(14px) saturate(1.4); -webkit-backdrop-filter: blur(14px) saturate(1.4);
   box-shadow: var(--shadow-sm); font-weight: 600; font-size: 14px; cursor: pointer;
 }
-.brand .logo { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); color: #fff; display: grid; place-items: center; }
+.pill.brand { font-weight: 700; letter-spacing: -0.01em; }
 .top-right { display: flex; gap: 8px; align-items: center; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
 .status-dot.live { background: var(--ok); }
@@ -104,8 +104,7 @@ img { display: block; max-width: 100%; }
   .sheet-grip span { width: 40px; height: 5px; border-radius: 99px; background: var(--line); }
   #panel-body { padding: 0 18px 24px; }
 }
-.desktop-brand { display: none; align-items: center; gap: 10px; margin-bottom: 18px; font-weight: 700; font-size: 17px; }
-.desktop-brand .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: #fff; display: grid; place-items: center; }
+.desktop-brand { display: none; align-items: center; gap: 10px; margin-bottom: 22px; font-weight: 750; font-size: 17px; letter-spacing: -0.015em; }
 
 /* ------------------------------------------------------------ type */
 h1 { font-size: 27px; line-height: 1.15; letter-spacing: -0.02em; margin: 6px 0 8px; font-weight: 750; }
@@ -127,7 +126,9 @@ p { margin: 0 0 10px; }
   background: var(--surface); font-weight: 600; font-size: 15px; cursor: pointer; white-space: nowrap;
 }
 .btn:active { transform: scale(0.98); }
-.btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-text); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+.btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-text); }
+.btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.btn:not(.primary):hover:not(:disabled) { background: var(--surface-2); }
 .btn.block { width: 100%; }
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -467,3 +468,74 @@ a.bookmarklet { cursor: grab; text-decoration: none; }
 
 .progress .indeterminate { animation: indet 1.4s ease-in-out infinite; }
 @keyframes indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
+/* ---------------------------------------------------------------- roomshift */
+.stepper { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 10px; }
+.stepper .track { display: flex; gap: 3px; flex: none; }
+.stepper .track i { width: 16px; height: 4px; border-radius: 99px; background: var(--line); }
+.stepper .track i.on { background: var(--accent); }
+.lede { margin-bottom: 20px; }
+
+.drop { padding: 28px 16px; border-width: 1.5px; transition: border-color 0.15s, background 0.15s; }
+.drop .ic { color: var(--accent); margin-bottom: 4px; }
+.drop b { color: var(--text); font-size: 15px; }
+.drop:hover .ic { color: var(--accent); }
+.drop:hover b { color: var(--accent); }
+.drop.busy { cursor: progress; border-style: solid; border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--surface); }
+.drop.busy b { font-variant-numeric: tabular-nums; }
+
+.spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; flex: none; display: inline-block; }
+@media (prefers-reduced-motion: reduce) { .spinner, .steps li.active .badge, .progress .indeterminate { animation-duration: 2.4s; } }
+
+.rs-how-title { font-size: 13px; font-weight: 650; color: var(--text-2); margin: 26px 0 4px; }
+.rs-how { list-style: none; margin: 0; padding: 0; }
+.rs-how li { display: grid; grid-template-columns: 32px 1fr; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.rs-how li:first-child { border-top: 0; }
+.rs-how .ic { width: 32px; height: 32px; padding: 8px; border-radius: 9px; background: var(--surface-2); color: var(--text-2); }
+.rs-how li div { display: grid; gap: 2px; line-height: 1.3; }
+.rs-how b { font-size: 14px; font-weight: 600; }
+.rs-how span { font-size: 13px; color: var(--text-2); }
+
+.view-head { margin: 0 0 18px; }
+.rs-title { font-weight: 650; font-size: 15px; line-height: 1.3; }
+.view-head .sub { line-height: 1.3; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.icon-btn:hover { background: var(--surface-2); }
+.rs-ask { margin: 0 0 12px; }
+
+.composer { display: flex; gap: 6px; padding: 5px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface-2); transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
+.composer:focus-within { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
+.composer input { flex: 1; min-width: 0; height: 40px; border: 0; background: transparent; padding: 0 10px; font-size: 16px; outline: none; }
+.composer input::placeholder { color: var(--text-3); }
+.composer .btn { min-height: 40px; height: 40px; border-radius: 10px; padding: 0 14px 0 16px; gap: 6px; }
+.rs-examples { margin-top: 10px; }
+.rs-examples .chip { height: 32px; padding: 0 12px; font-size: 13px; color: var(--text-2); }
+.rs-examples .chip:hover { color: var(--text); background: var(--surface-2); }
+.chip-thumb { width: 22px; height: 22px; object-fit: cover; border-radius: 6px; margin-left: -8px; }
+
+.world-card { padding: 14px; margin: 16px 0 4px; }
+.world-top { display: flex; gap: 8px; align-items: center; }
+.world-top b { flex: 1; min-width: 0; font-size: 15px; line-height: 1.3; }
+.world-brief { margin: 4px 0 0; line-height: 1.4; }
+.steps.compact { margin: 10px 0 0; padding-top: 6px; border-top: 1px solid var(--line); }
+.steps.compact li { gap: 10px; padding: 5px 0; font-size: 14px; }
+.steps.compact li > div { flex: 1; min-width: 0; }
+.steps.compact .badge { width: 18px; height: 18px; border-width: 1.5px; font-size: 11px; }
+.step-note { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; font-weight: 500; white-space: nowrap; }
+
+.viewbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; }
+.vb { display: grid; justify-items: center; gap: 4px; padding: 10px 4px 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text-2); font-size: 12px; font-weight: 600; line-height: 1.3; cursor: pointer; white-space: nowrap; }
+.vb:hover { background: var(--surface-2); color: var(--text); }
+.vb.on { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.rs-controls { margin: 8px 0 0; }
+.rs-controls kbd { margin-right: 2px; }
+
+.rs-details { margin-top: 20px; }
+.rs-details summary { align-items: center; color: var(--text-2); font-size: 13px; }
+.rs-details summary .ic { transition: transform 0.2s; color: var(--text-3); }
+.rs-details[open] summary .ic { transform: rotate(180deg); }
+
+#stage-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 4px; text-align: center; pointer-events: none; color: var(--text-2); font-size: 13px; }
+#stage-note b { color: var(--text); font-size: 15px; font-weight: 650; margin-top: 8px; }
+#stage-note .sn-ic { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--glass); border: 1px solid var(--line); color: var(--text-2); box-shadow: var(--shadow-sm); }
+#stage-note .spinner { width: 28px; height: 28px; border-width: 2.5px; }
+@media (max-width: 899px) { #stage-note { top: calc((100dvh - var(--sheet-h, 60dvh)) / 2 + 20px); } }

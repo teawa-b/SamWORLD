@@ -42,8 +42,6 @@ effect(() => {
   }
 });
 
-document.querySelector('#topbar .logo')!.innerHTML = icon('roof', 14);
-
 // Roomshift headset modes (DETAIL.md), both 1:1 with the real room: stand where you started filming, facing the
 // same way, and press VR (the new world all around you) or AR (Quest passthrough: the new world painted over
 // your real room). VITE_ENABLE_XR=false hides them.
