@@ -1,0 +1,38 @@
+[
+ {
+  "id": "hook",
+  "script": "This is seventeen seconds of phone video. Just me, walking down a hallway. That is all Sam World needs to build a world.",
+  "audio": "v2-hook.wav",
+  "seconds": 9.03
+ },
+ {
+  "id": "scan",
+  "script": "Sam World pulls twenty five frames and sends them to a GPU worker on Modal. It rebuilds the hallway as a one million point cloud, at real scale. Six point eight metres long, two point three metres high.",
+  "audio": "v2-scan.wav",
+  "seconds": 15.34
+ },
+ {
+  "id": "sam",
+  "script": "Next, SAM three point one outlines the objects. Nine of them, doors and doormats, tracked across ten different views. Muse Spark names each one and lifts it into the three D space.",
+  "audio": "v2-sam.wav",
+  "seconds": 13.55
+ },
+ {
+  "id": "plan",
+  "script": "Then you type a world. A haunted Victorian library corridor, lit by candles. Muse turns that sentence into a plan for every wall, the floor, the ceiling, and every object it found.",
+  "audio": "v2-plan.wav",
+  "seconds": 13.7
+ },
+ {
+  "id": "image",
+  "script": "Muse Image, Meta's image model, paints every surface from that plan. Damask walls, worn oak floors, a smoke stained ceiling. And SAM three D turns the objects SAM found into real three D models, placed back where they stand.",
+  "audio": "v2-image.wav",
+  "seconds": 17.33
+ },
+ {
+  "id": "outro",
+  "script": "Phone video in. Explorable world out. In the browser, or on a Meta Quest. Sam World. Built with Muse, SAM three point one, SAM three D, and Modal.",
+  "audio": "v2-outro.wav",
+  "seconds": 12.23
+ }
+]
