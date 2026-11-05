@@ -8,3 +8,4 @@ dist/
 .iwsdk/
 __pycache__/
 backend/data/
+models/

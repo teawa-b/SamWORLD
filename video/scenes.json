@@ -1,0 +1,58 @@
+[
+ {
+  "title": "Your room. Any world.",
+  "script": "Your room. Any world you can imagine. This is Sam World, a world model built for the Build Your World track. Start with a room you already know, and turn it into somewhere you have never been.",
+  "audio": "voice-0.wav",
+  "duration": 10.624,
+  "seconds": 12.02
+ },
+ {
+  "title": "Start with your surroundings.",
+  "script": "Building an explorable three D world usually means modelling tools and weeks of work. Sam World starts with something you already have: a short video walking around your own room, or a handful of photos.",
+  "audio": "voice-1.wav",
+  "duration": 11.818666666666667,
+  "seconds": 13.22
+ },
+ {
+  "title": "A room becomes a space.",
+  "script": "Sam World reconstructs the room in three D at real scale, with camera poses and depth. Then SAM three point one segments every object, and Meta's Muse models reason about what each one is and where it sits.",
+  "audio": "voice-2.wav",
+  "duration": 13.461333333333334,
+  "seconds": 14.86
+ },
+ {
+  "title": "Type a world.",
+  "script": "Now the creative part. Type a world, like a haunted Victorian library. Muse Wonder turns that idea into a full plan for every wall, floor, ceiling and piece of furniture. Your room stays the spatial anchor while everything else changes.",
+  "audio": "voice-3.wav",
+  "duration": 14.762666666666666,
+  "seconds": 16.16
+ },
+ {
+  "title": "From pixels to objects.",
+  "script": "Muse Image, Meta's image model, paints the new surfaces and restyles each object. Then SAM three D, running on my own GPU worker on Modal, lifts every restyled piece into a real three D object, placed exactly where the original stands.",
+  "audio": "voice-4.wav",
+  "duration": 16.085333333333335,
+  "seconds": 17.49
+ },
+ {
+  "title": "Built as a real pipeline.",
+  "script": "Under the hood is a TypeScript backend with saved scans, cached results, bounded queues and model call budgets. Every surface and object streams in as it finishes, so the world assembles around you instead of making you wait.",
+  "audio": "voice-5.wav",
+  "duration": 13.717333333333332,
+  "seconds": 15.12
+ },
+ {
+  "title": "Explore. Reimagine. Repeat.",
+  "script": "Explore it in the browser, or step inside on a Meta Quest with the Immersive Web SDK. The scan is saved, so you can type a new world and watch the same room transform again.",
+  "audio": "voice-6.wav",
+  "duration": 10.88,
+  "seconds": 12.28
+ },
+ {
+  "title": "Build Your World.",
+  "script": "Make creating a world feel as natural as describing one. Sam World. Built by Tiwa Bakre, with Meta Muse, SAM three point one, and SAM three D on Modal.",
+  "audio": "voice-7.wav",
+  "duration": 10.858666666666666,
+  "seconds": 12.26
+ }
+]
