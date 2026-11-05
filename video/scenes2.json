@@ -30,6 +30,12 @@
   "seconds": 17.33
  },
  {
+  "id": "inside",
+  "script": "And this is not a picture. You are standing inside the hallway, rebuilt in three D from that one clip. Walk forward, and watch the haunted library spread across the real walls, the floor, and the ceiling, around you.",
+  "audio": "v2-inside.wav",
+  "seconds": 18
+ },
+ {
   "id": "outro",
   "script": "Phone video in. Explorable world out. In the browser, or on a Meta Quest. Sam World. Built with Muse, SAM three point one, SAM three D, and Modal.",
   "audio": "v2-outro.wav",
