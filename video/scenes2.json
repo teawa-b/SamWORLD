@@ -3,19 +3,19 @@
   "id": "hook",
   "script": "This is seventeen seconds of phone video. Just me, walking down a hallway. That's all SamWorld needs to build a world.",
   "audio": "el-hook.mp3",
-  "seconds": 9.17
+  "seconds": 9.55
  },
  {
   "id": "scan",
   "script": "SamWorld pulls twenty-five frames and sends them to a GPU worker on Modal. It rebuilds the hallway as a one-million-point cloud, at real scale. Six point eight metres long. Two point three metres high.",
   "audio": "el-scan.mp3",
-  "seconds": 15.15
+  "seconds": 15.29
  },
  {
   "id": "sam",
   "script": "Next, SAM 3.1 outlines the objects. Nine of them, doors and doormats, tracked across ten different views. Muse Spark names each one, and lifts it into 3D space.",
   "audio": "el-sam.mp3",
-  "seconds": 13.56
+  "seconds": 14.43
  },
  {
   "id": "room3d",
@@ -27,13 +27,13 @@
   "id": "plan",
   "script": "But here's what makes SamWorld different. You can prompt it to change the location. Type a new place, like a haunted Victorian library, lit by candles. Muse turns that one sentence into a plan for every wall, the floor, the ceiling, and every object it found.",
   "audio": "el-plan.mp3",
-  "seconds": 18.09
+  "seconds": 19.37
  },
  {
   "id": "image",
   "script": "Muse Image, Meta's image model, paints every surface from that plan. Damask walls. Worn oak floors. A smoke-stained ceiling. Every door and every mat is restyled too, and SAM 3D rebuilds them in 3D.",
   "audio": "el-image.mp3",
-  "seconds": 17.54
+  "seconds": 17.93
  },
  {
   "id": "inside",
@@ -45,6 +45,6 @@
   "id": "outro",
   "script": "Phone video in. Any place you can prompt, out. In the browser, or on a Meta Quest. SamWorld. Built with Muse, SAM 3.1, SAM 3D, and Modal.",
   "audio": "el-outro.mp3",
-  "seconds": 13.93
+  "seconds": 13.62
  }
 ]
