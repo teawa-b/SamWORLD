@@ -31,9 +31,9 @@
  },
  {
   "id": "inside",
-  "script": "And this is not a picture. You are standing inside the hallway, rebuilt in three D from that one clip. Walk forward, and watch the haunted library spread across the real walls, the floor, and the ceiling, around you.",
+  "script": "And this is not a picture. You are standing inside the hallway, rebuilt in three D from that one clip. Walk forward, and the haunted library spreads across the real walls. Every door becomes carved mahogany, and every mat a worn Persian rug.",
   "audio": "v2-inside.wav",
-  "seconds": 18
+  "seconds": 18.84
  },
  {
   "id": "outro",
