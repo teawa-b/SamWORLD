@@ -1,44 +1,44 @@
 [
  {
   "id": "hook",
-  "script": "This is seventeen seconds of phone video. Just me, walking down a hallway. That is all Sam World needs to build a world.",
-  "audio": "v2-hook.wav",
-  "seconds": 9.03
+  "script": "This is seventeen seconds of phone video. Just me, walking down a hallway. That's all SamWorld needs to build a world.",
+  "audio": "el-hook.mp3",
+  "seconds": 9.17
  },
  {
   "id": "scan",
-  "script": "Sam World pulls twenty five frames and sends them to a GPU worker on Modal. It rebuilds the hallway as a one million point cloud, at real scale. Six point eight metres long, two point three metres high.",
-  "audio": "v2-scan.wav",
-  "seconds": 15.34
+  "script": "SamWorld pulls twenty-five frames and sends them to a GPU worker on Modal. It rebuilds the hallway as a one-million-point cloud, at real scale. Six point eight metres long. Two point three metres high.",
+  "audio": "el-scan.mp3",
+  "seconds": 15.15
  },
  {
   "id": "sam",
-  "script": "Next, SAM three point one outlines the objects. Nine of them, doors and doormats, tracked across ten different views. Muse Spark names each one and lifts it into the three D space.",
-  "audio": "v2-sam.wav",
-  "seconds": 13.55
+  "script": "Next, SAM 3.1 outlines the objects. Nine of them, doors and doormats, tracked across ten different views. Muse Spark names each one, and lifts it into 3D space.",
+  "audio": "el-sam.mp3",
+  "seconds": 13.56
  },
  {
   "id": "plan",
-  "script": "Then you type a world. A haunted Victorian library corridor, lit by candles. Muse turns that sentence into a plan for every wall, the floor, the ceiling, and every object it found.",
-  "audio": "v2-plan.wav",
-  "seconds": 13.7
+  "script": "Then you type a world. A haunted Victorian library corridor, lit by candles. Muse turns that one sentence into a plan for every wall, the floor, the ceiling, and every object it found.",
+  "audio": "el-plan.mp3",
+  "seconds": 14.99
  },
  {
   "id": "image",
-  "script": "Muse Image, Meta's image model, paints every surface from that plan. Damask walls, worn oak floors, a smoke stained ceiling. And SAM three D turns the objects SAM found into real three D models, placed back where they stand.",
-  "audio": "v2-image.wav",
-  "seconds": 17.33
+  "script": "Muse Image, Meta's image model, paints every surface from that plan. Damask walls. Worn oak floors. A smoke-stained ceiling. And SAM 3D turns the objects SAM found into real 3D models, placed right back where they stand.",
+  "audio": "el-image.mp3",
+  "seconds": 18.13
  },
  {
   "id": "inside",
-  "script": "And this is not a picture. You are standing inside the hallway, rebuilt in 3D from that one clip. Walk forward, and the haunted library spreads across the real walls. Now turn around. Every door is carved mahogany, and every mat is a worn Persian rug.",
-  "audio": "v2-inside.wav",
+  "script": "And this is not a picture. You're standing inside the hallway, rebuilt in 3D from that one clip. Walk forward, and the haunted library spreads across the real walls. Now turn around. Every door is carved mahogany, and every mat, a worn Persian rug.",
+  "audio": "el-inside.mp3",
   "seconds": 26
  },
  {
   "id": "outro",
-  "script": "Phone video in. Explorable world out. In the browser, or on a Meta Quest. Sam World. Built with Muse, SAM three point one, SAM three D, and Modal.",
-  "audio": "v2-outro.wav",
-  "seconds": 12.23
+  "script": "Phone video in. Explorable world out. In the browser, or on a Meta Quest. SamWorld. Built with Muse, SAM 3.1, SAM 3D, and Modal.",
+  "audio": "el-outro.mp3",
+  "seconds": 13.09
  }
 ]
