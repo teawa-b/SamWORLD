@@ -1,0 +1,66 @@
+[
+  {
+    "title": "Your room. Any world.",
+    "script": "Your room. Any world you can imagine. This is Sam World, a creative spatial AI project by Shroozy. Start with a room you already know, and turn it into somewhere you have never been.",
+    "audio": "voice-0.mp3",
+    "duration": 9.664,
+    "seconds": 11.36,
+    "bounds": []
+  },
+  {
+    "title": "Start with your surroundings.",
+    "script": "Making an explorable three dimensional world usually means learning modelling tools and building everything from scratch. Sam World starts with something much more familiar: a short video walking around your own room, or a set of photos.",
+    "audio": "voice-1.mp3",
+    "duration": 12.757333333333333,
+    "seconds": 14.46,
+    "bounds": []
+  },
+  {
+    "title": "A room becomes a space.",
+    "script": "The browser extracts frames from the capture. Meta Map Anything reconstructs the scene, including camera poses and depth. The application fits a room shell to the resulting geometry, then uses Muse reasoning and SAM three point one to identify objects and locate them in the space.",
+    "audio": "voice-2.mp3",
+    "duration": 16.426666666666666,
+    "seconds": 18.13,
+    "bounds": []
+  },
+  {
+    "title": "Type a world.",
+    "script": "Now comes the creative part. Type a world, such as a haunted Victorian library. Muse turns that request into a structured plan for the walls, floor, ceiling and furniture. The room stays the spatial anchor, while its appearance can change around you.",
+    "audio": "voice-3.mp3",
+    "duration": 13.418666666666667,
+    "seconds": 15.12,
+    "bounds": []
+  },
+  {
+    "title": "From pixels to objects.",
+    "script": "Muse Image creates surface textures and restyles object images. SAM three D converts selected object images into three dimensional assets, placed back into the room. Each element has its own progress, so surfaces and furniture can arrive progressively instead of waiting for one giant result.",
+    "audio": "voice-4.mp3",
+    "duration": 17.237333333333332,
+    "seconds": 18.94,
+    "bounds": []
+  },
+  {
+    "title": "Built as a real pipeline.",
+    "script": "Behind the experience is a TypeScript backend with saved scans, cached results, bounded queues and model call budgets. The repository supports both a custom Modal worker and a hosted SAM three D provider. The current deployment uses fal for SAM three D, with Modal powering the room reconstruction worker.",
+    "audio": "voice-5.mp3",
+    "duration": 18.24,
+    "seconds": 19.94,
+    "bounds": []
+  },
+  {
+    "title": "Explore. Reimagine. Repeat.",
+    "script": "The spatial viewer is built with Three dot J S and Meta Immersive Web SDK. It combines an overview of the room with walkthrough controls and Web X R integration for Quest. A saved scan can be reused for a different prompt, so you do not need to capture the room again.",
+    "audio": "voice-6.mp3",
+    "duration": 14.826666666666666,
+    "seconds": 16.53,
+    "bounds": []
+  },
+  {
+    "title": "Build for Your World.",
+    "script": "Sam World is a hackathon prototype, and the visuals here illustrate the workflow rather than a live screen recording. Capture coverage affects reconstruction, and generated details can be imperfect. The ambition is simple: make creating a world feel as natural as describing one. Sam World. Built by Tiwa Bakre at Shroozy, for Build for Your World.",
+    "audio": "voice-7.mp3",
+    "duration": 19.370666666666665,
+    "seconds": 21.07,
+    "bounds": []
+  }
+]
