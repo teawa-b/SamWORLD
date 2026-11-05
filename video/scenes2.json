@@ -7,9 +7,9 @@
  },
  {
   "id": "scan",
-  "script": "SamWorld pulls twenty-five frames and sends them to a GPU worker on Modal. It rebuilds the hallway as a one-million-point cloud, at real scale. Six point eight metres long. Two point three metres high.",
+  "script": "SamWorld sends twenty-five frames to Meta's MapAnything, running on a GPU worker on Modal. It rebuilds the hallway as a one-million-point cloud, at real scale. Six point eight metres long. Two point three metres high.",
   "audio": "el-scan.mp3",
-  "seconds": 15.29
+  "seconds": 16.42
  },
  {
   "id": "sam",
@@ -40,6 +40,12 @@
   "script": "And this is not a picture. You're standing inside the hallway, rebuilt in 3D from that one clip. Walk forward, and the haunted library spreads across the real walls. Now turn around. Every door is carved mahogany, and every mat, a worn Persian rug.",
   "audio": "el-inside.mp3",
   "seconds": 26
+ },
+ {
+  "id": "stack",
+  "script": "All of this runs on Meta's AI. MapAnything rebuilds the geometry. SAM 3.1 finds every object. Muse Spark understands the room and plans the new world. Muse Image paints it. SAM 3D brings the objects into 3D. And the Immersive Web SDK puts you inside it, in the browser, or on a Quest.",
+  "audio": "el-stack.mp3",
+  "seconds": 24.1
  },
  {
   "id": "outro",
