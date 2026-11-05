@@ -18,16 +18,22 @@
   "seconds": 13.56
  },
  {
+  "id": "room3d",
+  "audio": "el-room3d.mp3",
+  "script": "And this is the result. Your hallway, rebuilt as a 3D world you can walk through. The walls are textured from your own video, and SAM 3D rebuilt the objects as real 3D models, right where they sit.",
+  "seconds": 18
+ },
+ {
   "id": "plan",
-  "script": "Then you type a world. A haunted Victorian library corridor, lit by candles. Muse turns that one sentence into a plan for every wall, the floor, the ceiling, and every object it found.",
+  "script": "But here's what makes SamWorld different. You can prompt it to change the location. Type a new place, like a haunted Victorian library, lit by candles. Muse turns that one sentence into a plan for every wall, the floor, the ceiling, and every object it found.",
   "audio": "el-plan.mp3",
-  "seconds": 14.99
+  "seconds": 18.09
  },
  {
   "id": "image",
-  "script": "Muse Image, Meta's image model, paints every surface from that plan. Damask walls. Worn oak floors. A smoke-stained ceiling. And SAM 3D turns the objects SAM found into real 3D models, placed right back where they stand.",
+  "script": "Muse Image, Meta's image model, paints every surface from that plan. Damask walls. Worn oak floors. A smoke-stained ceiling. Every door and every mat is restyled too, and SAM 3D rebuilds them in 3D.",
   "audio": "el-image.mp3",
-  "seconds": 18.13
+  "seconds": 17.54
  },
  {
   "id": "inside",
@@ -37,8 +43,8 @@
  },
  {
   "id": "outro",
-  "script": "Phone video in. Explorable world out. In the browser, or on a Meta Quest. SamWorld. Built with Muse, SAM 3.1, SAM 3D, and Modal.",
+  "script": "Phone video in. Any place you can prompt, out. In the browser, or on a Meta Quest. SamWorld. Built with Muse, SAM 3.1, SAM 3D, and Modal.",
   "audio": "el-outro.mp3",
-  "seconds": 13.09
+  "seconds": 13.93
  }
 ]
